@@ -31,6 +31,7 @@ struct Source {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Sources {
     result: RunResult,
     paths: Vec<Source>,
