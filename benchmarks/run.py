@@ -218,7 +218,15 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
             data = json.loads(report.read_text())
             records = stryker_records(data, workspace, spec["project"])
         else:
-            records = rmut_records(json.loads(report.read_text()), workspace)
+            data = json.loads(report.read_text())
+            records = rmut_records(data, workspace)
+            if args.measure:
+                switched_ids = re.findall(r"^Switched execution ([a-fA-F0-9]{64})$",
+                                          (directory / "tool.log").read_text(), re.M)
+                expected_ids = [mutant["id"] for mutant in data["mutants"]]
+                result["switched_mutants"] = len(switched_ids)
+                if sorted(switched_ids) != sorted(expected_ids):
+                    raise ValueError("Rmut did not use switched execution for every mutant")
         if records and not any(row["outcome"] != "ignored" for row in records.values()):
             raise ValueError("Mutation report contained only exclusions")
         if not records:

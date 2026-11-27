@@ -3,7 +3,8 @@
     "source": "fixtures/Conformance",
     "project": "Subject/Subject.csproj",
     "test_project": "Subject.Tests/Subject.Tests.csproj",
-    "shared_operators": true
+    "shared_operators": true,
+    "rmut_args": ["--execution", "switched"]
   },
   "relational-gap": {
     "source": "fixtures/Consumer",
