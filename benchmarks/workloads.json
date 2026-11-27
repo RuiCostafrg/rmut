@@ -40,6 +40,7 @@
     "require_incremental": true,
     "require_direct_vstest": true,
     "require_parallel_batches": 2,
+    "stryker_config": {"concurrency": 2},
     "require_switched": true
   },
   "relational-gap": {
