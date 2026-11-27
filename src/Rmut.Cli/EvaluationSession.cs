@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Xml;
@@ -25,7 +26,8 @@ internal sealed class EvaluationSession : IDisposable
     private readonly string? selector;
     private Workspace? switchedWorkspace;
     private string? productionAssemblyName;
-    private string? vstestConsole;
+    private sealed record VSTestConsole(string Path, IReadOnlyDictionary<string, string> Environment);
+    private VSTestConsole? vstestConsole;
 
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
     {
@@ -214,7 +216,7 @@ internal sealed class EvaluationSession : IDisposable
         string project, string workspace, CancellationToken cancellation)
     {
         var propertiesToQuery = reuseBaselineBuild
-            ? "TargetFrameworks,TargetFileName,MSBuildBinPath" : "TargetFrameworks";
+            ? "TargetFrameworks,TargetFileName,MSBuildBinPath,DOTNET_HOST_PATH" : "TargetFrameworks";
         var process = await DotnetProcess.RunAsync(Path.GetDirectoryName(project)!, timeout, cancellation,
             "msbuild", project, "-nologo", $"-getProperty:{propertiesToQuery}", "-getItem:Compile");
         if (process.TimedOut)
@@ -233,7 +235,10 @@ internal sealed class EvaluationSession : IDisposable
                 productionAssemblyName = !string.IsNullOrEmpty(targetFile) && Path.GetFileName(targetFile) == targetFile
                     ? targetFile : null;
                 var sdk = properties.GetProperty("MSBuildBinPath").GetString();
+                var host = properties.GetProperty("DOTNET_HOST_PATH").GetString();
                 if (sdk is not null && Path.IsPathFullyQualified(sdk) &&
+                    host is not null && Path.IsPathFullyQualified(host) && File.Exists(host) &&
+                    Path.GetDirectoryName(host) is { } dotnetRoot &&
                     Environment.GetEnvironmentVariable("VSTEST_CONSOLE_PATH") is null &&
                     Environment.GetEnvironmentVariable("DOTNET_TEST_RUNNER") is null &&
                     baselineBuildSnapshot is { } snapshot &&
@@ -243,7 +248,14 @@ internal sealed class EvaluationSession : IDisposable
                     !HasWorkspaceSdkOverride(snapshot.Map(baselineWorkspace.Map(testProject)), snapshot.Root))
                 {
                     var console = Path.Combine(sdk, "vstest.console.dll");
-                    vstestConsole = File.Exists(console) ? console : null;
+                    if (File.Exists(console))
+                    {
+                        vstestConsole = new VSTestConsole(console, new Dictionary<string, string>
+                        {
+                            ["VSTEST_DOTNET_ROOT_PATH"] = dotnetRoot,
+                            ["VSTEST_DOTNET_ROOT_ARCHITECTURE"] = RuntimeInformation.ProcessArchitecture.ToString()
+                        });
+                    }
                 }
             }
             if (!string.IsNullOrWhiteSpace(frameworks))
@@ -313,7 +325,7 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<RunResult> TestAsync(string testProject, CancellationToken cancellation,
-        KeyValuePair<string, string>? selection = null, string? assembly = null, string? console = null)
+        KeyValuePair<string, string>? selection = null, string? assembly = null, VSTestConsole? console = null)
     {
         var directory = Path.GetDirectoryName(testProject)!;
         var results = Path.Combine(directory, "TestResults", Guid.NewGuid().ToString("N"));
@@ -329,7 +341,7 @@ internal sealed class EvaluationSession : IDisposable
         }
         else
         {
-            arguments = ["exec", console, assembly, "--logger:trx;LogFilePrefix=rm", $"--resultsdirectory:{results}"];
+            arguments = ["exec", console.Path, assembly, "--logger:trx;LogFilePrefix=rm", $"--resultsdirectory:{results}"];
         }
 
         if (selection is { } selector)
@@ -339,7 +351,7 @@ internal sealed class EvaluationSession : IDisposable
                 ? [.. arguments, "--environment", assignment]
                 : [.. arguments, $"--environment:{assignment}"];
         }
-        var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, arguments);
+        var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, console?.Environment, arguments);
         if (test.TimedOut)
             return new RunResult(Outcome.TimedOut, "Tests timed out.");
 
