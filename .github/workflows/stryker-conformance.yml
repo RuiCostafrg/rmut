@@ -131,10 +131,22 @@ jobs:
             --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
             --output "$results" --timeout 1200 || status=$?
           test "$status" -le 1
-          test -s "$results/pair-01/pair.json"
-          if [ "$status" -eq 1 ]; then
-            echo "::warning::Full-project comparison did not establish parity. Inspect the evidence artifact."
-          fi
+          python3 - "$results/pair-01/pair.json" <<'PYCODE'
+          import json
+          import sys
+
+          with open(sys.argv[1]) as stream:
+              pair = json.load(stream)
+          for tool in ("stryker", "rmut"):
+              result = pair[tool]
+              print(f"{tool}: exit={result.get('exit_code')}, normalized mutants={len(result.get('mutants', []))}")
+              if "error" in result:
+                  print(f"::warning::{tool} comparison incomplete. See its evidence artifact.")
+          if all("error" not in pair[tool] for tool in ("stryker", "rmut")):
+              print({key: len(rows) for key, rows in pair["differential"].items()})
+              if not pair["equivalent"]:
+                  print("::warning::Completed reports differ. See the differential in pair.json.")
+          PYCODE
       - name: Save comparison evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
