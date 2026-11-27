@@ -28,6 +28,7 @@
     "shared_operators": true,
     "rmut_args": ["--execution", "switched-incremental", "--switched-test-assembly", "bin/Debug/net10.0/Subject.Tests.dll"],
     "require_incremental": true,
+    "require_direct_vstest": true,
     "require_switched": true
   },
   "relational-gap": {

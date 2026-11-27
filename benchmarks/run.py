@@ -227,6 +227,10 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
                     result["incremental_build"] = "Incremental switched build ready." in log.splitlines()
                     if not result["incremental_build"]:
                         raise ValueError("Rmut did not use the incremental switched build")
+                if spec.get("require_direct_vstest"):
+                    result["direct_vstest"] = "Direct VSTest console ready." in log.splitlines()
+                    if not result["direct_vstest"]:
+                        raise ValueError("Rmut did not use the direct VSTest console")
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):

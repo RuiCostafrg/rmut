@@ -9,7 +9,7 @@ namespace Rmut.Cli;
 internal sealed record SourceFile(string Path, string Content);
 internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector);
 internal sealed record InstrumentedFile(int Index, string Content);
-internal enum SwitchedBuild { Unavailable, Clean, Incremental }
+internal enum SwitchedBuild { Unavailable, Clean, Incremental, IncrementalWithDirectConsole }
 
 internal sealed class EvaluationSession : IDisposable
 {
@@ -25,6 +25,7 @@ internal sealed class EvaluationSession : IDisposable
     private readonly string? selector;
     private Workspace? switchedWorkspace;
     private string? productionAssemblyName;
+    private string? vstestConsole;
 
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
     {
@@ -119,7 +120,7 @@ internal sealed class EvaluationSession : IDisposable
                 if (await ValidateSwitchedBuildAsync(baselineWorkspace, files, cancellation, skipRestore: true))
                 {
                     switchedWorkspace = baselineWorkspace;
-                    return SwitchedBuild.Incremental;
+                    return vstestConsole is null ? SwitchedBuild.Incremental : SwitchedBuild.IncrementalWithDirectConsole;
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
@@ -212,8 +213,10 @@ internal sealed class EvaluationSession : IDisposable
     private async Task<(RunResult Result, string[] Paths)> DiscoverSourcesAsync(
         string project, string workspace, CancellationToken cancellation)
     {
+        var propertiesToQuery = reuseBaselineBuild
+            ? "TargetFrameworks,TargetFileName,MSBuildBinPath" : "TargetFrameworks";
         var process = await DotnetProcess.RunAsync(Path.GetDirectoryName(project)!, timeout, cancellation,
-            "msbuild", project, "-nologo", "-getProperty:TargetFrameworks,TargetFileName", "-getItem:Compile");
+            "msbuild", project, "-nologo", $"-getProperty:{propertiesToQuery}", "-getItem:Compile");
         if (process.TimedOut)
             return (new RunResult(Outcome.TimedOut, "Production source discovery timed out."), []);
         if (process.ExitCode != 0)
@@ -224,9 +227,23 @@ internal sealed class EvaluationSession : IDisposable
             using var document = JsonDocument.Parse(process.Output);
             var properties = document.RootElement.GetProperty("Properties");
             var frameworks = properties.GetProperty("TargetFrameworks").GetString();
-            var targetFile = properties.GetProperty("TargetFileName").GetString();
-            productionAssemblyName = !string.IsNullOrEmpty(targetFile) && Path.GetFileName(targetFile) == targetFile
-                ? targetFile : null;
+            if (reuseBaselineBuild)
+            {
+                var targetFile = properties.GetProperty("TargetFileName").GetString();
+                productionAssemblyName = !string.IsNullOrEmpty(targetFile) && Path.GetFileName(targetFile) == targetFile
+                    ? targetFile : null;
+                var sdk = properties.GetProperty("MSBuildBinPath").GetString();
+                if (sdk is not null && Path.IsPathFullyQualified(sdk) &&
+                    baselineBuildSnapshot is { } snapshot &&
+                    !HasWorkspaceSdkOverride(project, workspace) &&
+                    !HasWorkspaceSdkOverride(baselineWorkspace.Map(testProject), workspace) &&
+                    !HasWorkspaceSdkOverride(snapshot.Map(project), snapshot.Root) &&
+                    !HasWorkspaceSdkOverride(snapshot.Map(baselineWorkspace.Map(testProject)), snapshot.Root))
+                {
+                    var console = Path.Combine(sdk, "vstest.console.dll");
+                    vstestConsole = File.Exists(console) ? console : null;
+                }
+            }
             if (!string.IsNullOrWhiteSpace(frameworks))
                 return (new RunResult(Outcome.RunnerError, "The production project must use TargetFramework."), []);
 
@@ -246,6 +263,19 @@ internal sealed class EvaluationSession : IDisposable
         {
             return (new RunResult(Outcome.RunnerError, $"Invalid MSBuild source list: {ex.Message}"), []);
         }
+    }
+
+    private static bool HasWorkspaceSdkOverride(string projectPath, string workspace)
+    {
+        for (var directory = Path.GetDirectoryName(projectPath);
+            directory is not null && Workspace.Contains(workspace, directory);
+            directory = Path.GetDirectoryName(directory))
+        {
+            if (File.Exists(Path.Combine(directory, "global.json")))
+                return true;
+        }
+
+        return false;
     }
 
     private async Task<RunResult> EvaluateAsync(string testProject, CancellationToken cancellation)
@@ -276,20 +306,37 @@ internal sealed class EvaluationSession : IDisposable
         if (privateAssembly is not null && !File.Exists(privateAssembly))
             return Task.FromResult(new RunResult(Outcome.RunnerError, "Switched test assembly is missing from the build copy."));
 
-        return TestAsync(privateProject, cancellation, selection, privateAssembly);
+        var console = template == baselineWorkspace ? vstestConsole : null;
+        return TestAsync(privateProject, cancellation, selection, privateAssembly, console);
     }
 
     private async Task<RunResult> TestAsync(string testProject, CancellationToken cancellation,
-        KeyValuePair<string, string>? selection = null, string? assembly = null)
+        KeyValuePair<string, string>? selection = null, string? assembly = null, string? console = null)
     {
         var directory = Path.GetDirectoryName(testProject)!;
         var results = Path.Combine(directory, "TestResults", Guid.NewGuid().ToString("N"));
-        string[] arguments = assembly is null
-            ? ["test", testProject, "--no-build", "--no-restore",
-                "--logger", "trx;LogFilePrefix=rm", "--results-directory", results]
-            : ["test", assembly, "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
+        string[] arguments;
+        if (assembly is null)
+        {
+            arguments = ["test", testProject, "--no-build", "--no-restore",
+                "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
+        }
+        else if (console is null)
+        {
+            arguments = ["test", assembly, "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
+        }
+        else
+        {
+            arguments = ["exec", console, assembly, "--logger:trx;LogFilePrefix=rm", $"--resultsdirectory:{results}"];
+        }
+
         if (selection is { } selector)
-            arguments = [.. arguments, "--environment", $"{selector.Key}={selector.Value}"];
+        {
+            var assignment = $"{selector.Key}={selector.Value}";
+            arguments = console is null
+                ? [.. arguments, "--environment", assignment]
+                : [.. arguments, $"--environment:{assignment}"];
+        }
         var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, arguments);
         if (test.TimedOut)
             return new RunResult(Outcome.TimedOut, "Tests timed out.");

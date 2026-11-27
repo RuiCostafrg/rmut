@@ -97,10 +97,12 @@ internal static class NativeRunner
                         var ready = await session.PrepareSwitchedAsync(preparation.Files, cancellation);
                         log(ready switch
                         {
-                            SwitchedBuild.Incremental => "Incremental switched build ready.",
+                            SwitchedBuild.Incremental or SwitchedBuild.IncrementalWithDirectConsole => "Incremental switched build ready.",
                             SwitchedBuild.Clean => "Switched build ready.",
                             _ => "Switched build unavailable. Using fresh execution."
                         });
+                        if (ready == SwitchedBuild.IncrementalWithDirectConsole)
+                            log("Direct VSTest console ready.");
                         await ReplyAsync(ready != SwitchedBuild.Unavailable);
                         break;
                     case EvaluateSwitched evaluation when evaluation.Id is { Length: 64 }:

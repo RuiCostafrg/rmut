@@ -30,8 +30,9 @@ def child():
     sys.stdout.buffer.write(result.stdout)
     sys.stderr.buffer.write(result.stderr)
     tests = []
-    if verb == "test":
-        results = Path(arguments[arguments.index("--results-directory") + 1])
+    if verb == "test" or (verb == "exec" and Path(arguments[1]).name == "vstest.console.dll"):
+        results = Path(arguments[arguments.index("--results-directory") + 1] if verb == "test" else
+                       next(arg.split(":", 1)[1] for arg in arguments if arg.startswith("--resultsdirectory:")))
         for path in results.glob("*.trx"):
             root = ET.parse(path).getroot()
             tests.append({
