@@ -34,6 +34,12 @@ same suite as running the project. Projects that configure runsettings, filters,
 adapters, or test targets through MSBuild should use project-based execution.
 The original baseline and fresh fallback still run through the test project.
 
+Use `--execution switched-incremental` with `--switched-test-assembly`
+for projects whose restore and build inputs are independent of the instrumented source bodies. Rmut
+snapshots the successful baseline build before running the original project
+tests, then uses those intermediates for the switched build at the same
+path. A failed incremental build or control run retries from a clean copy.
+
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 
 ## Verify a local package

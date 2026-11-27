@@ -27,6 +27,12 @@ internal sealed class Workspace : IDisposable
         }
     }
 
+    public void RestoreSnapshot(Workspace snapshot)
+    {
+        Directory.Delete(Root, recursive: true);
+        Directory.Move(snapshot.Root, Root);
+    }
+
     public string Map(string original) => Path.Combine(Root, Path.GetRelativePath(SourceRoot, original));
 
     public static string FindRoot(string project, string testProject)
@@ -84,5 +90,9 @@ internal sealed class Workspace : IDisposable
         }
     }
 
-    public void Dispose() => Directory.Delete(Root, recursive: true);
+    public void Dispose()
+    {
+        if (Directory.Exists(Root))
+            Directory.Delete(Root, recursive: true);
+    }
 }

@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace Rmut.Cli;
 
 internal sealed record RunOptions(string Project, string TestProject, string? Json, bool Switched = false,
-    string? SwitchedTestAssembly = null)
+    string? SwitchedTestAssembly = null, bool ReuseBaselineBuild = false)
 {
     public static bool TryParse(string[] args, [NotNullWhen(true)] out RunOptions? options)
     {
@@ -25,15 +25,19 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
             return false;
 
         var execution = paths.GetValueOrDefault("--execution", "fresh");
-        if (execution is not ("fresh" or "switched"))
+        if (execution is not ("fresh" or "switched" or "switched-incremental"))
             return false;
 
         var assembly = paths.GetValueOrDefault("--switched-test-assembly");
-        if (assembly is not null && (execution != "switched" || Path.IsPathRooted(assembly) ||
+        if (assembly is not null && (execution == "fresh" || Path.IsPathRooted(assembly) ||
             !Path.GetExtension(assembly).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
             return false;
 
-        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched", assembly);
+        if (execution == "switched-incremental" && assembly is null)
+            return false;
+
+        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution != "fresh", assembly,
+            execution == "switched-incremental");
         return true;
     }
 }

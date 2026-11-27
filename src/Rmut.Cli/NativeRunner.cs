@@ -95,8 +95,13 @@ internal static class NativeRunner
                         preparation.Files.All(file => file is not null && (uint)file.Index < (uint)sourceCount &&
                             file.Content is not null):
                         var ready = await session.PrepareSwitchedAsync(preparation.Files, cancellation);
-                        log(ready ? "Switched build ready." : "Switched build unavailable. Using fresh execution.");
-                        await ReplyAsync(ready);
+                        log(ready switch
+                        {
+                            SwitchedBuild.Incremental => "Incremental switched build ready.",
+                            SwitchedBuild.Clean => "Switched build ready.",
+                            _ => "Switched build unavailable. Using fresh execution."
+                        });
+                        await ReplyAsync(ready != SwitchedBuild.Unavailable);
                         break;
                     case EvaluateSwitched evaluation when evaluation.Id is { Length: 64 }:
                         var switched = await session.EvaluateSwitchedAsync(evaluation.Id, cancellation);

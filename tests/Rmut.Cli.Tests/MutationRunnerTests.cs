@@ -35,11 +35,12 @@ public sealed class MutationRunnerTests
     }
 
     [Theory]
-    [InlineData(null, true)]
-    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true)]
-    [InlineData("bin/Debug/net10.0/Missing.Tests.dll", false)]
+    [InlineData(null, true, false)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, false)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, true)]
+    [InlineData("bin/Debug/net10.0/Missing.Tests.dll", false, false)]
     public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState(
-        string? assembly, bool expectSwitched)
+        string? assembly, bool expectSwitched, bool reuseBaselineBuild)
     {
         using var fixture = new Fixture("""
             const string marker = "mutation-test-marker";
@@ -65,7 +66,8 @@ public sealed class MutationRunnerTests
             """);
         var log = new List<string>();
         var fresh = await fixture.RunNativeAsync();
-        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add, switchedTestAssembly: assembly);
+        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add, switchedTestAssembly: assembly,
+            reuseBaselineBuild: reuseBaselineBuild);
 
         Assert.Equal(Outcome.Passed, switched.Baseline.Outcome);
         Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
@@ -74,6 +76,7 @@ public sealed class MutationRunnerTests
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
+        Assert.Equal(reuseBaselineBuild, log.Contains("Incremental switched build ready."));
         string[] expectedExecutions = expectSwitched
             ? [$"Switched execution {switched.Mutants[0].Id}", $"Switched execution {switched.Mutants[1].Id}"]
             : [];
@@ -275,8 +278,12 @@ public sealed class MutationRunnerTests
             new ManagedReferenceRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
-            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null) =>
-            NativeRunner.RunAsync(options with { Switched = switched, SwitchedTestAssembly = switchedTestAssembly },
+            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null,
+            bool reuseBaselineBuild = false) =>
+            NativeRunner.RunAsync(options with
+            {
+                Switched = switched, SwitchedTestAssembly = switchedTestAssembly, ReuseBaselineBuild = reuseBaselineBuild
+            },
                 timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);
 

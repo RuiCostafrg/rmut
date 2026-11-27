@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
@@ -8,6 +9,7 @@ namespace Rmut.Cli;
 internal sealed record SourceFile(string Path, string Content);
 internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector);
 internal sealed record InstrumentedFile(int Index, string Content);
+internal enum SwitchedBuild { Unavailable, Clean, Incremental }
 
 internal sealed class EvaluationSession : IDisposable
 {
@@ -17,9 +19,12 @@ internal sealed class EvaluationSession : IDisposable
     private readonly string? switchedTestAssembly;
     private readonly Workspace baselineWorkspace;
     private readonly TimeSpan timeout;
+    private readonly bool reuseBaselineBuild;
+    private Workspace? baselineBuildSnapshot;
     private readonly List<string> originals = [];
     private readonly string? selector;
     private Workspace? switchedWorkspace;
+    private string? productionAssemblyName;
 
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
     {
@@ -35,11 +40,31 @@ internal sealed class EvaluationSession : IDisposable
         }
         baselineWorkspace = new Workspace(root, cancellation);
         this.timeout = timeout;
+        reuseBaselineBuild = options.ReuseBaselineBuild;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
     }
 
-    public Task<RunResult> BaselineAsync(CancellationToken cancellation) =>
-        EvaluateAsync(baselineWorkspace.Map(testProject), cancellation);
+    public async Task<RunResult> BaselineAsync(CancellationToken cancellation)
+    {
+        var privateProject = baselineWorkspace.Map(testProject);
+        var build = await BuildAsync(privateProject, cancellation);
+        if (build.Outcome != Outcome.Passed)
+            return build;
+
+        if (reuseBaselineBuild)
+        {
+            try
+            {
+                baselineBuildSnapshot = new Workspace(baselineWorkspace.Root, cancellation, includeBuildOutputs: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The original baseline can still run, and preparation can use a clean workspace.
+            }
+        }
+
+        return await TestAsync(privateProject, cancellation);
+    }
 
     public async Task<SourceList> DiscoverAsync(CancellationToken cancellation)
     {
@@ -79,49 +104,84 @@ internal sealed class EvaluationSession : IDisposable
         }
     }
 
-    public async Task<bool> PrepareSwitchedAsync(IReadOnlyList<InstrumentedFile> files, CancellationToken cancellation)
+    public async Task<SwitchedBuild> PrepareSwitchedAsync(IReadOnlyList<InstrumentedFile> files, CancellationToken cancellation)
     {
         if (selector is null)
-            return false;
+            return SwitchedBuild.Unavailable;
+
+        if (baselineBuildSnapshot is { } snapshot)
+        {
+            try
+            {
+                // MSBuild and NuGet intermediates can contain absolute paths.
+                // Restore the pre-test contents at the exact path where they were built.
+                baselineWorkspace.RestoreSnapshot(snapshot);
+                if (await ValidateSwitchedBuildAsync(baselineWorkspace, files, cancellation, skipRestore: true))
+                {
+                    switchedWorkspace = baselineWorkspace;
+                    return SwitchedBuild.Incremental;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
+            {
+                // Retry from clean inputs if the incremental build cannot be used.
+            }
+        }
 
         Workspace? template = null;
         try
         {
             template = new Workspace(root, cancellation);
-            if (switchedTestAssembly is { } assembly)
-            {
-                // Custom output directories may already contain artifacts in the input.
-                var templateAssembly = template.Map(assembly);
-                if (File.Exists(templateAssembly))
-                    File.Delete(templateAssembly);
-            }
-
-            foreach (var file in files)
-                await File.WriteAllTextAsync(template.Map(originals[file.Index]), file.Content, cancellation);
-
-            var build = await BuildAsync(template.Map(testProject), cancellation, rejectFrameworkTypeConflicts: true);
-            if (build.Outcome != Outcome.Passed)
-                return false;
-
-            // Run a control with every switch off in the same kind of private copy
-            // used for mutants. Keep the compiled template pristine.
-            using var control = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
-            var result = await TestSwitchedAsync(template, control, cancellation);
-            if (result.Outcome != Outcome.Passed)
-                return false;
+            if (!await ValidateSwitchedBuildAsync(template, files, cancellation, skipRestore: false))
+                return SwitchedBuild.Unavailable;
 
             switchedWorkspace = template;
             template = null;
-            return true;
+            return SwitchedBuild.Clean;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
         {
-            return false;
+            return SwitchedBuild.Unavailable;
         }
         finally
         {
             template?.Dispose();
         }
+    }
+
+    private async Task<bool> ValidateSwitchedBuildAsync(Workspace template, IReadOnlyList<InstrumentedFile> files,
+        CancellationToken cancellation, bool skipRestore)
+    {
+        if (switchedTestAssembly is { } assembly && File.Exists(template.Map(assembly)))
+            File.Delete(template.Map(assembly));
+
+        foreach (var file in files)
+            await File.WriteAllTextAsync(template.Map(originals[file.Index]), file.Content, cancellation);
+
+        var build = await BuildAsync(template.Map(testProject), cancellation, rejectFrameworkTypeConflicts: true,
+            skipRestore: skipRestore);
+        if (build.Outcome != Outcome.Passed)
+            return false;
+
+        // An incremental target can decide to skip compilation. Check that the
+        // production DLL loaded from the test output contains this run's selector.
+        if (skipRestore)
+        {
+            if (productionAssemblyName is null || switchedTestAssembly is null || selector is null)
+                return false;
+
+            var productionAssembly = Path.Combine(Path.GetDirectoryName(template.Map(switchedTestAssembly))!,
+                productionAssemblyName);
+            if (!File.Exists(productionAssembly) ||
+                (await File.ReadAllBytesAsync(productionAssembly, cancellation)).AsSpan()
+                    .IndexOf(Encoding.Unicode.GetBytes(selector)) < 0)
+                return false;
+        }
+
+        // Run the unselected control in the same kind of private copy used for mutants.
+        using var control = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
+        var result = await TestSwitchedAsync(template, control, cancellation);
+        return result.Outcome == Outcome.Passed;
     }
 
     public async Task<RunResult?> EvaluateSwitchedAsync(string id, CancellationToken cancellation)
@@ -144,14 +204,16 @@ internal sealed class EvaluationSession : IDisposable
     public void Dispose()
     {
         using var baseline = baselineWorkspace;
-        switchedWorkspace?.Dispose();
+        using var snapshot = baselineBuildSnapshot;
+        if (switchedWorkspace != baselineWorkspace)
+            switchedWorkspace?.Dispose();
     }
 
     private async Task<(RunResult Result, string[] Paths)> DiscoverSourcesAsync(
         string project, string workspace, CancellationToken cancellation)
     {
         var process = await DotnetProcess.RunAsync(Path.GetDirectoryName(project)!, timeout, cancellation,
-            "msbuild", project, "-nologo", "-getProperty:TargetFrameworks", "-getItem:Compile");
+            "msbuild", project, "-nologo", "-getProperty:TargetFrameworks,TargetFileName", "-getItem:Compile");
         if (process.TimedOut)
             return (new RunResult(Outcome.TimedOut, "Production source discovery timed out."), []);
         if (process.ExitCode != 0)
@@ -160,7 +222,11 @@ internal sealed class EvaluationSession : IDisposable
         try
         {
             using var document = JsonDocument.Parse(process.Output);
-            var frameworks = document.RootElement.GetProperty("Properties").GetProperty("TargetFrameworks").GetString();
+            var properties = document.RootElement.GetProperty("Properties");
+            var frameworks = properties.GetProperty("TargetFrameworks").GetString();
+            var targetFile = properties.GetProperty("TargetFileName").GetString();
+            productionAssemblyName = !string.IsNullOrEmpty(targetFile) && Path.GetFileName(targetFile) == targetFile
+                ? targetFile : null;
             if (!string.IsNullOrWhiteSpace(frameworks))
                 return (new RunResult(Outcome.RunnerError, "The production project must use TargetFramework."), []);
 
@@ -189,9 +255,11 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<RunResult> BuildAsync(string testProject, CancellationToken cancellation,
-        bool rejectFrameworkTypeConflicts = false)
+        bool rejectFrameworkTypeConflicts = false, bool skipRestore = false)
     {
         string[] arguments = ["build", testProject, "--disable-build-servers", "--nologo"];
+        if (skipRestore)
+            arguments = [.. arguments, "--no-restore"];
         if (rejectFrameworkTypeConflicts)
             arguments = [.. arguments, "-warnaserror:CS0436"];
         var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation, arguments);
