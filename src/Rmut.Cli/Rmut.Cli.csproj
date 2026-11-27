@@ -16,9 +16,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Rmut.Cli.Tests" />
     <AssemblyMetadata Include="RmutNativeRid" Value="$(NETCoreSdkRuntimeIdentifier)" />
-    <Content Include="$(NativeTargetDirectory)/release/$(NativeBinaryName)"
-             Link="$(NativeBinaryName)" CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(NativeTargetDirectory)/release/$(NativeBinaryName)"
+          Link="$(NativeBinaryName)" CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" Pack="false" />
   </ItemGroup>
   <Target Name="BuildNativeEngine" BeforeTargets="PrepareForBuild">
     <Error Condition="'$(RuntimeIdentifier)' != '' And '$(RuntimeIdentifier)' != '$(NETCoreSdkRuntimeIdentifier)'"
