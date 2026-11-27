@@ -94,3 +94,41 @@ Rmut mutant used switched execution. The runner test compares the opt-in
 mode with fresh execution using static initialization, a mutable static
 counter, and a filesystem marker. It also verifies fresh fallback when
 the requested DLL is missing.
+
+## Incremental build candidate
+
+The [hosted evidence](https://github.com/RuiCostafrg/rmut/actions/runs/46042907049/artifacts/15220887890)
+contains the six raw pairs, runtime logs, TRX timing summaries, process trace,
+and memory samples for revision `2d04589`. One pair was an excluded warmup.
+Both tools exited successfully with identical mutation identities and four
+kills plus one survivor in every pair. Rmut logged incremental build success
+and used the switched binary for every mutant. The run used the same fixture,
+SDK, versions, CPU affinity and benchmark settings as the DLL rerun above,
+with a one-minute starting host load of 1.71.
+
+| Metric | Stryker median (range) | Rmut median (range) | Paired median ratio (range) | Gate |
+| --- | ---: | ---: | ---: | ---: |
+| Wall time | 12.90 s (12.76–13.61) | 11.40 s (10.49–12.95) | 0.883× (0.771–0.952) | 0.50×, fail |
+| Peak cgroup memory | 248.36 MiB (247.21–249.38) | 218.81 MiB (218.22–220.55) | 0.883× (0.876–0.892) | 0.80×, fail |
+| Process-tree CPU | 14.67 CPU-s (14.62–14.80) | 11.89 CPU-s (11.84–11.97) | 0.809× (0.806–0.814) | 0.80×, fail |
+
+The CPU and peak-memory ratios were below both prior DLL candidates across
+all observed pairs. Wall time was lower than Stryker in all five measured
+pairs. The wall-ratio range overlaps measurements from both prior DLL runs,
+so the size of the incremental wall improvement across hosted VMs is
+uncertain. The time saved fits within the eliminated restore and compiler
+work, and both tools' CPU usage fits within the two-core budget.
+
+In the separate instrumented run, the baseline build ran restore (1.047 s
+inclusive) and two C# compiler tasks (4.449 s combined). The incremental
+build ran one C# compiler task (1.815 s) and skipped restore. The trace
+showed seven separate testhosts. The six switched VSTest command invocations
+took 1.417–1.520 s apiece under tracing. Saving their roughly 0.5 s launch
+interval alone would leave a substantial wall-time gap to the gate.
+
+The maximum sampled proportional set size (PSS) was 305.18 MiB across 427
+samples, during the original baseline build. MSBuild accounted for 179.18 MiB
+and its second C# compiler process for 93.88 MiB at that sample. This
+trace-session diagnostic includes the tracer and shim and may miss shorter
+peaks. PSS apportions shared mappings and excludes the cgroup's unmapped
+page cache. The timed memory gate uses the separate, untraced cgroup peak.
