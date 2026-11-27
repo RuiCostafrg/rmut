@@ -13,12 +13,10 @@ work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 work=$(cd -- "$work" && pwd -P)
 
-feed_for_dotnet=$feed
 work_for_dotnet=$work
 tool="$work/tools/rmut"
 if [[ ${OSTYPE:-} == msys* ]]; then
-  # NuGet persists the source path and .NET also reads NUGET_PACKAGES directly.
-  feed_for_dotnet=$(cygpath -aw "$feed")
+  # .NET reads NUGET_PACKAGES directly from the environment.
   work_for_dotnet=$(cygpath -am "$work")
   tool="$tool.exe"
 fi
@@ -28,15 +26,17 @@ mkdir -p "$work/consumer/Calculator" "$work/consumer/Calculator.Tests"
 cp -- "$fixture"/Calculator/*.{cs,csproj} "$work/consumer/Calculator/"
 cp -- "$fixture"/Calculator.Tests/*.{cs,csproj} "$work/consumer/Calculator.Tests/"
 
+mkdir "$work/feed"
+cp -- "$feed/Rmut.$version.nupkg" "$work/feed/"
 cat > "$work/tool.NuGet.Config" <<'EOF_CONFIG'
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
     <clear />
+    <add key="smoke-test" value="./feed" />
   </packageSources>
 </configuration>
 EOF_CONFIG
-dotnet nuget add source "$feed_for_dotnet" --name smoke-test --configfile "$work_for_dotnet/tool.NuGet.Config"
 
 cd -- "$work/consumer"
 NUGET_PACKAGES="$work_for_dotnet/packages" dotnet tool install Rmut --version "$version" \
