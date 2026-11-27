@@ -2,6 +2,11 @@ name: Paired mutation benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Collect a separate switched process-tree diagnostic
+        type: boolean
+        default: false
   push:
     branches: [perf/m2-paired-baseline]
     paths:
@@ -64,6 +69,14 @@ jobs:
               --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
               --cgroup "$parent" --pairs 5 --warmups 1 --timeout 300 --output "$report/results"
           )
+      - name: Profile switched process tree
+        if: ${{ !cancelled() && inputs.profile }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y strace
+          affinity=$(python3 -c 'import os; print(",".join(map(str, sorted(os.sched_getaffinity(0))[:2])))')
+          taskset --cpu-list "$affinity" python3 -B benchmarks/profile_switched.py \
+            "$RUNNER_TEMP/rmut/rmut" "$RUNNER_TEMP/benchmark-evidence/profile"
       - name: Save benchmark evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -78,3 +91,5 @@ jobs:
             ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/*.log
             ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/*.json
             ${{ runner.temp }}/benchmark-evidence/results/pair-*/stryker/reports/*.json
+            ${{ runner.temp }}/benchmark-evidence/profile/*.log
+            ${{ runner.temp }}/benchmark-evidence/profile/*.json*
