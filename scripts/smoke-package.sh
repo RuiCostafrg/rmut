@@ -18,9 +18,19 @@ mkdir -p "$work/consumer/Calculator" "$work/consumer/Calculator.Tests"
 cp -- "$fixture"/Calculator/*.{cs,csproj} "$work/consumer/Calculator/"
 cp -- "$fixture"/Calculator.Tests/*.{cs,csproj} "$work/consumer/Calculator.Tests/"
 
+cat > "$work/tool.NuGet.Config" <<'EOF_CONFIG'
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+  </packageSources>
+</configuration>
+EOF_CONFIG
+dotnet nuget add source "$feed" --name smoke-test --configfile "$work/tool.NuGet.Config"
+
 cd -- "$work/consumer"
 NUGET_PACKAGES="$work/packages" dotnet tool install Rmut --version "$version" \
-  --tool-path "$work/tools" --source "$feed" --no-http-cache
+  --tool-path "$work/tools" --configfile "$work/tool.NuGet.Config" --no-http-cache
 "$work/tools/rmut" run --project Calculator/Calculator.csproj \
   --test-project Calculator.Tests/Calculator.Tests.csproj --json "$work/report.json"
 
