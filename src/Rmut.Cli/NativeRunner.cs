@@ -26,7 +26,7 @@ internal static class NativeRunner
     private abstract record Request;
     private sealed record Baseline : Request;
     private sealed record Sources : Request;
-    private sealed record Prepare(InstrumentedFile[] Files) : Request;
+    private sealed record Prepare(InstrumentedFile[] Files, bool CollectCoverage) : Request;
     private sealed record EvaluateSwitched(string Id) : Request;
     private sealed record Evaluate(int Index, string MutatedSource) : Request;
     private sealed record Log(string Text) : Request;
@@ -94,9 +94,10 @@ internal static class NativeRunner
                     case Prepare preparation when preparation.Files is { Length: > 0 } &&
                         preparation.Files.All(file => file is not null && (uint)file.Index < (uint)sourceCount &&
                             file.Content is not null):
-                        var ready = await session.PrepareSwitchedAsync(preparation.Files, cancellation);
-                        log(ready ? "Switched build ready." : "Switched build unavailable. Using fresh execution.");
-                        await ReplyAsync(ready);
+                        var prepared = await session.PrepareSwitchedAsync(
+                            preparation.Files, preparation.CollectCoverage, cancellation);
+                        log(prepared.Ready ? "Switched build ready." : "Switched build unavailable. Using fresh execution.");
+                        await ReplyAsync(prepared);
                         break;
                     case EvaluateSwitched evaluation when evaluation.Id is { Length: 64 }:
                         var switched = await session.EvaluateSwitchedAsync(evaluation.Id, cancellation);

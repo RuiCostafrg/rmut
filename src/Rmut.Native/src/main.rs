@@ -1,6 +1,7 @@
 mod discovery;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::HashSet;
 use std::io::{self, BufRead, BufReader, Write};
 use tree_sitter::Parser;
 
@@ -11,6 +12,7 @@ enum Outcome {
     TestFailed,
     Killed,
     Survived,
+    NoCoverage,
     BuildFailed,
     TimedOut,
     RunnerError,
@@ -29,10 +31,18 @@ struct Source {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Sources {
     result: RunResult,
     paths: Vec<Source>,
     selector: Option<String>,
+    coverage_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Preparation {
+    ready: bool,
+    hits: Option<HashSet<String>>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +75,7 @@ enum Request<'a> {
     Sources,
     Prepare {
         files: Vec<InstrumentedSource>,
+        collect_coverage: bool,
     },
     EvaluateSwitched {
         id: String,
@@ -156,30 +167,57 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
         }
     }
     let mut switched = false;
+    let mut hits = None;
     if let Some(selector) = sources
         .selector
         .filter(|_| candidates.iter().all(|file| file.can_instrument))
     {
+        let coverage = sources
+            .coverage_path
+            .as_deref()
+            .filter(|_| candidates.iter().all(|file| file.can_collect_coverage));
         let files: Vec<_> = sources
             .paths
             .iter()
             .zip(&candidates)
             .enumerate()
             .filter_map(|(index, (source, file))| {
-                discovery::instrument(&source.content, &file.mutations, &selector)
+                discovery::instrument(&source.content, &file.mutations, &selector, coverage)
                     .map(|content| InstrumentedSource { index, content })
             })
             .collect();
         if !files.is_empty() {
-            switched = host.call(Request::Prepare { files })?;
+            let preparation: Preparation = host.call(Request::Prepare {
+                files,
+                collect_coverage: coverage.is_some(),
+            })?;
+            switched = preparation.ready;
+            if switched && coverage.is_some() {
+                let probes: HashSet<_> = candidates
+                    .iter()
+                    .flat_map(|file| &file.mutations)
+                    .filter(|mutant| mutant.can_switch())
+                    .map(|mutant| mutant.id.as_str())
+                    .collect();
+                hits = preparation.hits.filter(|hits| {
+                    !hits.is_empty() && hits.iter().all(|hit| probes.contains(hit.as_str()))
+                });
+            }
         }
     }
     for (index, (source, file)) in sources.paths.iter().zip(candidates).enumerate() {
         for mutant in file.mutations {
             let switched_result = if switched && mutant.can_switch() {
-                host.call(Request::EvaluateSwitched {
-                    id: mutant.id.clone(),
-                })?
+                if hits.as_ref().is_some_and(|hits| !hits.contains(&mutant.id)) {
+                    Some(RunResult {
+                        outcome: Outcome::NoCoverage,
+                        details: None,
+                    })
+                } else {
+                    host.call(Request::EvaluateSwitched {
+                        id: mutant.id.clone(),
+                    })?
+                }
             } else {
                 None
             };
@@ -223,12 +261,19 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
         .iter()
         .filter(|mutant| matches!(mutant.result.outcome, Outcome::Survived))
         .count();
-    host.send(Request::Log {
-        text: format!(
-            "Mutants: {}. Killed: {killed}. Survived: {survived}.",
-            report.mutants.len()
-        ),
-    })?;
+    let uncovered = report
+        .mutants
+        .iter()
+        .filter(|mutant| matches!(mutant.result.outcome, Outcome::NoCoverage))
+        .count();
+    let mut summary = format!(
+        "Mutants: {}. Killed: {killed}. Survived: {survived}.",
+        report.mutants.len()
+    );
+    if sources.coverage_path.is_some() {
+        summary.push_str(&format!(" No coverage: {uncovered}."));
+    }
+    host.send(Request::Log { text: summary })?;
     Ok(report)
 }
 

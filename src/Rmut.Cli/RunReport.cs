@@ -4,7 +4,7 @@ namespace Rmut.Cli;
 
 internal enum Outcome
 {
-    Passed, TestFailed, Killed, Survived, BuildFailed, TimedOut, RunnerError
+    Passed, TestFailed, Killed, Survived, NoCoverage, BuildFailed, TimedOut, RunnerError
 }
 
 internal sealed record RunResult(Outcome Outcome, string? Details = null);
