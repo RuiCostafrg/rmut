@@ -219,7 +219,7 @@ internal sealed class EvaluationSession : IDisposable
         string project, string workspace, CancellationToken cancellation)
     {
         var propertiesToQuery = reuseBaselineBuild
-            ? "TargetFrameworks,TargetFileName,MSBuildBinPath,DOTNET_HOST_PATH" : "TargetFrameworks";
+            ? "TargetFrameworks,TargetFileName,MSBuildBinPath,DOTNET_HOST_PATH,NETCoreSdkRuntimeIdentifier" : "TargetFrameworks";
         var process = await DotnetProcess.RunAsync(Path.GetDirectoryName(project)!, timeout, cancellation,
             "msbuild", project, "-nologo", $"-getProperty:{propertiesToQuery}", "-getItem:Compile");
         if (process.TimedOut)
@@ -239,7 +239,10 @@ internal sealed class EvaluationSession : IDisposable
                     ? targetFile : null;
                 var sdk = properties.GetProperty("MSBuildBinPath").GetString();
                 var host = properties.GetProperty("DOTNET_HOST_PATH").GetString();
-                if (sdk is not null && Path.IsPathFullyQualified(sdk) &&
+                var sdkRid = properties.GetProperty("NETCoreSdkRuntimeIdentifier").GetString();
+                var architecture = RuntimeInformation.ProcessArchitecture.ToString();
+                if (sdkRid?.EndsWith($"-{architecture}", StringComparison.OrdinalIgnoreCase) == true &&
+                    sdk is not null && Path.IsPathFullyQualified(sdk) &&
                     host is not null && Path.IsPathFullyQualified(host) && File.Exists(host) &&
                     Path.GetDirectoryName(host) is { } dotnetRoot &&
                     Environment.GetEnvironmentVariable("VSTEST_CONSOLE_PATH") is null &&
@@ -256,7 +259,7 @@ internal sealed class EvaluationSession : IDisposable
                         vstestConsole = new VSTestConsole(console, new Dictionary<string, string>
                         {
                             ["VSTEST_DOTNET_ROOT_PATH"] = dotnetRoot,
-                            ["VSTEST_DOTNET_ROOT_ARCHITECTURE"] = RuntimeInformation.ProcessArchitecture.ToString()
+                            ["VSTEST_DOTNET_ROOT_ARCHITECTURE"] = architecture
                         });
                     }
                 }

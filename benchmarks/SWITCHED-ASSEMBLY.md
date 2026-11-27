@@ -132,3 +132,32 @@ and its second C# compiler process for 93.88 MiB at that sample. This
 trace-session diagnostic includes the tracer and shim and may miss shorter
 peaks. PSS apportions shared mappings and excludes the cgroup's unmapped
 page cache. The timed memory gate uses the separate, untraced cgroup peak.
+
+## Direct VSTest console experiment
+
+The [first direct-console run](https://github.com/RuiCostafrg/rmut/actions/runs/46074562230/artifacts/15234573339)
+measured revision `3b8bc26` on AMD EPYC 9V74. The preceding incremental run
+used Intel Xeon 6975P-C. The first direct-console run used two pinned
+logical CPUs and had a starting load of 1.75. All five measured pairs and
+the excluded warmup matched the mutation identities and outcomes, confirmed
+incremental preparation, and used switched execution for all five mutants.
+
+| Metric | Stryker median (range) | Rmut median (range) | Paired median ratio (range) | Gate |
+| --- | ---: | ---: | ---: | ---: |
+| Wall time | 16.21 s (16.17–16.32) | 11.86 s (11.85–11.95) | 0.733× (0.726–0.737) | 0.50×, fail |
+| Peak cgroup memory | 230.90 MiB (230.74–231.25) | 179.64 MiB (179.56–180.30) | 0.778× (0.777–0.781) | 0.80×, pass |
+| Process-tree CPU | 20.31 CPU-s (20.29–20.37) | 15.11 CPU-s (15.09–15.19) | 0.744× (0.741–0.749) | 0.80×, pass |
+
+The direct-console trace measured seven new testhosts. Median command
+startup to testhost execution was 0.383 s for the six direct invocations,
+compared with 0.510 s in the earlier incremental wrapper trace. The runs
+used different VM types, and the direct run's absolute Rmut CPU use and
+wall time were higher than the preceding incremental run. The paired
+results establish the gates for each hosted run. They leave the size of
+the direct launcher's end-to-end contribution unconfirmed.
+
+The trace peaked at 264.90 MiB sampled PSS in the original baseline build,
+with MSBuild at 139.83 MiB and the compiler at 93.47 MiB. The same baseline
+phase dominated the previous trace. Rmut needs to save about 3.75 s on
+this VM to reach the wall gate, while the observed launcher interval
+accounts for about 2.30 s across the six switched invocations.
