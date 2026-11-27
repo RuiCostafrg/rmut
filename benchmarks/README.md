@@ -22,6 +22,7 @@ python3 -B benchmarks/run.py compare shared-operators \
 
 | Workload | Scope |
 | --- | --- |
+| `switched-operators` | Five independent arithmetic and equality edits supported by the Rust switched runner. One xUnit test kills four mutants and leaves one survivor. |
 | `shared-operators` | Equivalent arithmetic, equality and logical mutants. Two edits share a line. The tests kill four mutants and leave one survivor with coverage analysis off. |
 | `relational-gap` | Stryker has a second replacement for the same comparison expression. |
 | `no-coverage-gap` | Stryker per-test coverage distinguishes an uncovered mutation from a survivor. |
@@ -31,18 +32,26 @@ python3 -B benchmarks/run.py compare shared-operators \
 
 For a real project, clone the repository listed in [workloads.json](workloads.json), fetch the exact revision, and pass the checkout with `--checkout`. The harness extracts that revision with `git archive`. The checkout may contain unrelated local edits. The gap and real-project workloads are limited to compare mode. The current compatibility gaps are listed in the [feature inventory](STRYKER-5.1.0.md).
 
-## Measure a supported workload
+## Measure the switched runner
+
+Run the [Paired mutation benchmark](../.github/workflows/paired-benchmark.yml) workflow
+on the candidate branch through GitHub Actions. It installs the Release Rmut
+package built from that revision and Stryker.NET 5.1.0, uses an isolated .NET
+10.0.404 SDK, and delegates cgroup v2 accounting on an Ubuntu x64 runner. Download
+the `paired-benchmark` artifact from the run for the raw evidence, including when
+a gate fails.
+
 
 Use a quiet Linux host with a delegated cgroup v2 parent whose child groups expose `cpu.stat`, `memory.peak` and `cgroup.kill`. Use a fixed CPU affinity, a stable SDK and package source, and the same environment and worker budget for both tools. Record any changes to the host, repository or tool settings with the results. Use separate output directories for clean and incremental scenarios.
 
 ```sh
-python3 -B benchmarks/run.py measure shared-operators \
+python3 -B benchmarks/run.py measure switched-operators \
   --stryker "$run_root/stryker/dotnet-stryker" --rmut "$run_root/rmut/rmut" \
   --cgroup "$delegated_cgroup" --pairs 5 --warmups 1 \
   --output "$run_root/clean"
 ```
 
-Each trial starts with a fresh source copy and uses the same shared NuGet package cache. Both tools build in Debug with the configured workload and the installed binaries themselves come from release packages. The shipped conformance workload uses one Stryker worker and the serial managed Rmut runner. Both require a passing baseline and run the full test project for each eligible mutant. Tool-owned restore, build and test work runs inside the timed process tree. Fixture extraction, report comparison, warmups and incremental seeding are outside the aggregate. Pair order alternates across warmups and measured trials.
+Each trial starts with a fresh source copy and uses the same shared NuGet package cache. Both tools build in Debug with the configured workload and the installed binaries themselves come from release packages. The switched workload uses one Stryker worker and the serial Rust-backed Rmut runner. Both require a passing baseline and run the full test project for each eligible mutant. The measurement gate also checks that each Rmut mutant ran in switched mode. Tool-owned restore, build and test work runs inside the timed process tree. Fixture extraction, report comparison, warmups and incremental seeding are outside the aggregate. Pair order alternates across warmups and measured trials.
 
 The child cgroup measures peak charged memory, including charged file cache and short-lived descendants, and total user plus system CPU seconds. Average CPU percentage is CPU seconds divided by elapsed seconds times 100 and can exceed 100% on a multicore host. Peak cgroup memory depends on kernel page-cache accounting. Compare runs on the same host with consistent cache preparation.
 
