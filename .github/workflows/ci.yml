@@ -32,7 +32,7 @@ jobs:
           sha=$(git rev-parse HEAD)
           gh api "repos/$GITHUB_REPOSITORY/compare/$sha...main" --jq '.status' | grep -Ex 'ahead|identical'
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$sha&status=success" --jq '.total_count' | grep -Ex '[1-9][0-9]*'
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: 10.0.x
       - name: Determine package version
@@ -75,7 +75,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: 10.0.x
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
