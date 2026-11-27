@@ -26,6 +26,14 @@ Fresh execution is the default. It copies the workspace, restores and builds the
 
 Use `--execution switched` to opt into compiling supported mutations together. Rmut currently switches single-line binary expressions that form the entire body of an expression-bodied `int` or `bool` method, with operands drawn from `int` parameters and decimal integer literals. A separate test process selects one mutation at startup and runs the full suite in a private copy of the build. Unsupported mutations, failed instrumented builds or control runs, and indeterminate switched results use fresh execution.
 
+For single-target VSTest projects with a self-contained test configuration, pass
+`--switched-test-assembly bin/Debug/net10.0/Example.Tests.dll` to run the switched
+control and mutants directly from a built DLL. The path is relative to the test
+project directory and must point to a DLL written by the build. Use this option when running the DLL directly executes the
+same suite as running the project. Projects that configure runsettings, filters,
+adapters, or test targets through MSBuild should use project-based execution.
+The original baseline and fresh fallback still run through the test project.
+
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 
 ## Verify a local package

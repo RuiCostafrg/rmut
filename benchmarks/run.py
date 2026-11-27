@@ -220,7 +220,7 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
         else:
             data = json.loads(report.read_text())
             records = rmut_records(data, workspace)
-            if args.measure and spec.get("require_switched") and not seed:
+            if spec.get("require_switched") and not seed:
                 switched_ids = re.findall(r"^Switched execution ([a-fA-F0-9]{64})$",
                                           (directory / "tool.log").read_text(), re.M)
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]

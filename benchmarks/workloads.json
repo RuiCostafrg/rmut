@@ -13,6 +13,14 @@
     "rmut_args": ["--execution", "switched"],
     "require_switched": true
   },
+  "switched-assembly": {
+    "source": "fixtures/SwitchedBenchmark",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true,
+    "rmut_args": ["--execution", "switched", "--switched-test-assembly", "bin/Debug/net10.0/Subject.Tests.dll"],
+    "require_switched": true
+  },
   "relational-gap": {
     "source": "fixtures/Consumer",
     "project": "Calculator/Calculator.csproj",
