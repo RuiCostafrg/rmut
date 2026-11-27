@@ -2,7 +2,8 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Rmut.Cli;
 
-internal sealed record RunOptions(string Project, string TestProject, string? Json, bool Switched = false)
+internal sealed record RunOptions(string Project, string TestProject, string? Json, bool Switched = false,
+    string? SwitchedTestAssembly = null)
 {
     public static bool TryParse(string[] args, [NotNullWhen(true)] out RunOptions? options)
     {
@@ -13,7 +14,7 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
         var paths = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Length; i += 2)
         {
-            if (args[i] is not ("--project" or "--test-project" or "--json" or "--execution") ||
+            if (args[i] is not ("--project" or "--test-project" or "--json" or "--execution" or "--switched-test-assembly") ||
                 string.IsNullOrWhiteSpace(args[i + 1]) || args[i + 1].StartsWith("--") ||
                 !paths.TryAdd(args[i], args[i + 1]))
                 return false;
@@ -27,7 +28,12 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
         if (execution is not ("fresh" or "switched"))
             return false;
 
-        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched");
+        var assembly = paths.GetValueOrDefault("--switched-test-assembly");
+        if (assembly is not null && (execution != "switched" || Path.IsPathRooted(assembly) ||
+            !Path.GetExtension(assembly).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched", assembly);
         return true;
     }
 }

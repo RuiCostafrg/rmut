@@ -34,8 +34,10 @@ public sealed class MutationRunnerTests
         fixture.AssertInputsUnchanged();
     }
 
-    [Fact]
-    public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll")]
+    public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState(string? assembly)
     {
         using var fixture = new Fixture("""
             const string marker = "mutation-test-marker";
@@ -61,7 +63,7 @@ public sealed class MutationRunnerTests
             """);
         var log = new List<string>();
         var fresh = await fixture.RunNativeAsync();
-        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add);
+        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add, switchedTestAssembly: assembly);
 
         Assert.Equal(Outcome.Passed, switched.Baseline.Outcome);
         Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
@@ -272,8 +274,9 @@ public sealed class MutationRunnerTests
             new ManagedReferenceRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
-            bool switched = false, Action<string>? log = null) =>
-            NativeRunner.RunAsync(options with { Switched = switched }, timeout ?? TimeSpan.FromMinutes(2),
+            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null) =>
+            NativeRunner.RunAsync(options with { Switched = switched, SwitchedTestAssembly = switchedTestAssembly },
+                timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);
 
         public void AssertInputsUnchanged()

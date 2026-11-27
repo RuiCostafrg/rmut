@@ -14,6 +14,7 @@ internal sealed class EvaluationSession : IDisposable
     private readonly string project;
     private readonly string testProject;
     private readonly string root;
+    private readonly string? switchedTestAssembly;
     private readonly Workspace baselineWorkspace;
     private readonly TimeSpan timeout;
     private readonly List<string> originals = [];
@@ -25,6 +26,13 @@ internal sealed class EvaluationSession : IDisposable
         project = ResolveProject(options.Project);
         testProject = ResolveProject(options.TestProject);
         root = Workspace.FindRoot(project, testProject);
+        if (options.SwitchedTestAssembly is { } relativeAssembly)
+        {
+            var testDirectory = Path.GetDirectoryName(testProject)!;
+            switchedTestAssembly = Path.GetFullPath(relativeAssembly, testDirectory);
+            if (Path.IsPathRooted(relativeAssembly) || !Workspace.Contains(testDirectory, switchedTestAssembly))
+                throw new IOException("The switched test assembly must be relative to and inside the test project directory.");
+        }
         baselineWorkspace = new Workspace(root, cancellation);
         this.timeout = timeout;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
@@ -90,7 +98,7 @@ internal sealed class EvaluationSession : IDisposable
             // Run a control with every switch off in the same kind of private copy
             // used for mutants. Keep the compiled template pristine.
             using var control = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
-            var result = await TestAsync(control.Map(template.Map(testProject)), cancellation);
+            var result = await TestSwitchedAsync(template, control, cancellation);
             if (result.Outcome != Outcome.Passed)
                 return false;
 
@@ -116,7 +124,7 @@ internal sealed class EvaluationSession : IDisposable
         try
         {
             using var workspace = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
-            var result = await TestAsync(workspace.Map(template.Map(testProject)), cancellation, new(selector, id));
+            var result = await TestSwitchedAsync(template, workspace, cancellation, new(selector, id));
             return result.Outcome is Outcome.Passed or Outcome.TestFailed ? result : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
@@ -184,13 +192,26 @@ internal sealed class EvaluationSession : IDisposable
         return build.ExitCode == 0 ? new RunResult(Outcome.Passed) : new RunResult(Outcome.BuildFailed, build.Diagnostics);
     }
 
+    private Task<RunResult> TestSwitchedAsync(Workspace template, Workspace workspace,
+        CancellationToken cancellation, KeyValuePair<string, string>? selection = null)
+    {
+        var privateProject = workspace.Map(template.Map(testProject));
+        var privateAssembly = switchedTestAssembly is null ? null : workspace.Map(template.Map(switchedTestAssembly));
+        if (privateAssembly is not null && !File.Exists(privateAssembly))
+            return Task.FromResult(new RunResult(Outcome.RunnerError, "Switched test assembly is missing from the build copy."));
+
+        return TestAsync(privateProject, cancellation, selection, privateAssembly);
+    }
+
     private async Task<RunResult> TestAsync(string testProject, CancellationToken cancellation,
-        KeyValuePair<string, string>? selection = null)
+        KeyValuePair<string, string>? selection = null, string? assembly = null)
     {
         var directory = Path.GetDirectoryName(testProject)!;
         var results = Path.Combine(directory, "TestResults", Guid.NewGuid().ToString("N"));
-        string[] arguments = ["test", testProject, "--no-build", "--no-restore",
-            "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
+        string[] arguments = assembly is null
+            ? ["test", testProject, "--no-build", "--no-restore",
+                "--logger", "trx;LogFilePrefix=rm", "--results-directory", results]
+            : ["test", assembly, "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
         if (selection is { } selector)
             arguments = [.. arguments, "--environment", $"{selector.Key}={selector.Value}"];
         var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, arguments);

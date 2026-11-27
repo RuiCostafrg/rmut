@@ -3,6 +3,11 @@ name: Paired mutation benchmark
 on:
   workflow_dispatch:
     inputs:
+      workload:
+        description: Switched execution path
+        type: choice
+        options: [switched-operators, switched-assembly]
+        default: switched-operators
       profile:
         description: Collect a separate switched process-tree diagnostic
         type: boolean
@@ -44,6 +49,8 @@ jobs:
           dotnet tool install Rmut --version 0.0.1-benchmark --tool-path "$RUNNER_TEMP/rmut" \
             --add-source "$RUNNER_TEMP/feed"
       - name: Run paired benchmark
+        env:
+          WORKLOAD: ${{ inputs.workload || 'switched-operators' }}
         run: |
           parent="/sys/fs/cgroup/rmut-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           report="$RUNNER_TEMP/benchmark-evidence"
@@ -65,18 +72,19 @@ jobs:
           (
             # Sibling groups share the delegated parent as their migration boundary.
             sudo sh -c 'printf "%s" "$1" > "$2/cgroup.procs"' sh "$BASHPID" "$parent/harness"
-            exec taskset --cpu-list "$affinity" python3 -B benchmarks/run.py measure switched-operators \
+            exec taskset --cpu-list "$affinity" python3 -B benchmarks/run.py measure "$WORKLOAD" \
               --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
               --cgroup "$parent" --pairs 5 --warmups 1 --timeout 300 --output "$report/results"
           )
       - name: Profile switched process tree
         if: ${{ !cancelled() && inputs.profile }}
+        env:
+          WORKLOAD: ${{ inputs.workload }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y strace
+          command -v strace || { sudo apt-get update && sudo apt-get install -y strace; }
           affinity=$(python3 -c 'import os; print(",".join(map(str, sorted(os.sched_getaffinity(0))[:2])))')
           taskset --cpu-list "$affinity" python3 -B benchmarks/profile_switched.py \
-            "$RUNNER_TEMP/rmut/rmut" "$RUNNER_TEMP/benchmark-evidence/profile"
+            "$RUNNER_TEMP/rmut/rmut" "$RUNNER_TEMP/benchmark-evidence/profile" "$WORKLOAD"
       - name: Save benchmark evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

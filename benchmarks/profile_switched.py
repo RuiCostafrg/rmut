@@ -21,7 +21,8 @@ def child():
         command.append("-clp:PerformanceSummary")
 
     started = time.time()
-    result = subprocess.run(command, capture_output=True)
+    result = subprocess.run(command, capture_output=True,
+                            env={**os.environ, "DOTNET_HOST_PATH": command[0]})
     finished = time.time()
     output = Path(os.environ["RMUT_PROFILE_OUTPUT"])
     prefix = output / f"{started:.6f}-{verb}-{os.getpid()}"
@@ -44,16 +45,18 @@ def child():
 
 
 def main():
-    executable, output = map(Path, sys.argv[1:])
+    executable, output = (Path(value).resolve() for value in sys.argv[1:3])
+    workload = sys.argv[3] if len(sys.argv) > 3 else "switched-operators"
+    spec = json.loads((ROOT / "benchmarks/workloads.json").read_text())[workload]
     output.mkdir()
     workspace = output / "fixture"
-    shutil.copytree(ROOT / "fixtures/SwitchedBenchmark", workspace)
+    shutil.copytree(ROOT / spec["source"], workspace)
     with (output / "rmut.log").open("w") as log:
         subprocess.run(
-            ["strace", "-f", "-ttt", "-e", "trace=execve,execveat,wait4,exit_group,mkdir,mkdirat,copy_file_range,sendfile",
+            ["strace", "-f", "-ttt", "-T", "-e", "trace=execve,execveat,wait4,exit_group,mkdir,mkdirat,copy_file_range,sendfile",
              "-o", output / "process-tree.log",
-             executable, "run", "--project", "Subject/Subject.csproj", "--test-project",
-             "Subject.Tests/Subject.Tests.csproj", "--execution", "switched",
+             executable, "run", "--project", spec["project"], "--test-project",
+             spec["test_project"], *spec["rmut_args"],
              "--json", output / "rmut.json"],
             env={**ENV, "DOTNET_HOST_PATH": str(Path(__file__).resolve()),
                  "RMUT_PROFILE_DOTNET": shutil.which("dotnet"), "RMUT_PROFILE_OUTPUT": str(output)},
