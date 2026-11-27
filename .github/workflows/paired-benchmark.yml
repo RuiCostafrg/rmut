@@ -1,0 +1,80 @@
+name: Paired mutation benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [perf/m2-paired-baseline]
+    paths:
+      - '.github/workflows/paired-benchmark.yml'
+      - 'benchmarks/run.py'
+      - 'benchmarks/workloads.json'
+      - 'fixtures/SwitchedBenchmark/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.404
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/benchmark-dotnet
+      - name: Install and verify benchmark tools
+        run: |
+          test "$(dotnet --version)" = 10.0.404
+          rustc --version
+          cargo --version
+          python3 -B -m unittest discover -s benchmarks -v
+          dotnet tool install dotnet-stryker --version 5.1.0 --tool-path "$RUNNER_TEMP/stryker"
+          dotnet pack src/Rmut.Cli --configuration Release -p:PackageVersion=0.0.1-benchmark \
+            --output "$RUNNER_TEMP/feed"
+          dotnet tool install Rmut --version 0.0.1-benchmark --tool-path "$RUNNER_TEMP/rmut" \
+            --add-source "$RUNNER_TEMP/feed"
+      - name: Run paired benchmark
+        run: |
+          parent="/sys/fs/cgroup/rmut-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          report="$RUNNER_TEMP/benchmark-evidence"
+          mkdir -p "$report"
+          exec > >(tee "$report/runner.log") 2>&1
+          set -x
+          uname -a
+          lscpu
+          uptime
+          nproc
+          git rev-parse HEAD
+          cat /sys/fs/cgroup/cgroup.controllers /sys/fs/cgroup/cgroup.subtree_control
+          sudo mkdir "$parent"
+          trap 'sudo rmdir "$parent/harness" "$parent"' EXIT
+          echo '+cpu +memory' | sudo tee "$parent/cgroup.subtree_control"
+          sudo chown "$(id -u):$(id -g)" "$parent" "$parent/cgroup.procs"
+          sudo mkdir "$parent/harness"
+          affinity=$(python3 -c 'import os; print(",".join(map(str, sorted(os.sched_getaffinity(0))[:2])))')
+          (
+            # Sibling groups share the delegated parent as their migration boundary.
+            sudo sh -c 'printf "%s" "$1" > "$2/cgroup.procs"' sh "$BASHPID" "$parent/harness"
+            exec taskset --cpu-list "$affinity" python3 -B benchmarks/run.py measure switched-operators \
+              --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
+              --cgroup "$parent" --pairs 5 --warmups 1 --timeout 300 --output "$report/results"
+          )
+      - name: Save benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: paired-benchmark
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/benchmark-evidence/runner.log
+            ${{ runner.temp }}/benchmark-evidence/results/*.json
+            ${{ runner.temp }}/benchmark-evidence/results/*.log
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/pair.json
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/*.log
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/*.json
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/stryker/reports/*.json
