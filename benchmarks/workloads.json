@@ -36,7 +36,17 @@
     "stryker_config": {
       "coverage-analysis": "perTest"
     },
-    "comparison_only": "Rmut does not implement per-test coverage"
+    "comparison_only": "Rmut coverage is off and Stryker runs in perTest mode"
+  },
+  "coverage-all": {
+    "source": "fixtures/Conformance",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true,
+    "rmut_args": ["--execution", "switched", "--coverage", "all"],
+    "stryker_config": {
+      "coverage-analysis": "all"
+    }
   },
   "smart-enum": {
     "repository": "https://github.com/ardalis/SmartEnum.git",

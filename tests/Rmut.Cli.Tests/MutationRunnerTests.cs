@@ -129,6 +129,61 @@ public sealed class MutationRunnerTests
         Assert.DoesNotContain(log, line => line.StartsWith("Switched execution ", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task CoverageDistinguishesAnUnvisitedMethodFromAParallelSurvivor()
+    {
+        using var fixture = new Fixture("""
+            var values = new int[32];
+            System.Threading.Tasks.Parallel.For(0, values.Length, i =>
+            {
+                values[i] = Calculator.Add(3, 2);
+                _ = Calculator.Unasserted(i, 2);
+            });
+            Assert.All(values, value => Assert.Equal(5, value));
+            """, """
+            public static class Calculator
+            {
+                public static int Add(int a, int b) => a + b;
+                public static int Unasserted(int a, int b) => a * b;
+                public static int Unvisited(int a, int b) => a - b;
+            }
+            """);
+
+        var report = await fixture.RunNativeAsync(switched: true, coverage: true);
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Equal(new[] { Outcome.Killed, Outcome.Survived, Outcome.NoCoverage },
+            report.Mutants.Select(mutant => mutant.Outcome));
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CoverageFallsBackWhenCollectionCannotEstablishAbsence(bool staticInitialization)
+    {
+        var initializer = staticInitialization ? "public static readonly int Initialized = Add(3, 2);" : "";
+        using var fixture = new Fixture(staticInitialization
+            ? "Assert.Equal(5, Calculator.Initialized);"
+            : "Assert.Equal(5, Calculator.Combine(1, 2, 2));", $$"""
+            public static class Calculator
+            {
+                {{initializer}}
+                public static int Add(int a, int b) => a + b;
+                public static int Unvisited(int a, int b) => a - b;
+                public static int Combine(int a, int b, int c) => a + b + c;
+            }
+            """);
+
+        var full = await fixture.RunNativeAsync(switched: true);
+        var report = await fixture.RunNativeAsync(switched: true, coverage: true);
+
+        Assert.Equal(full.Mutants.Select(Identity), report.Mutants.Select(Identity));
+        Assert.Equal(staticInitialization ? Outcome.Killed : Outcome.Survived, report.Mutants[0].Outcome);
+        Assert.Equal(Outcome.Survived, report.Mutants[1].Outcome);
+        fixture.AssertInputsUnchanged();
+    }
+
     private static object Identity(MutantResult mutant) =>
         new { mutant.Id, mutant.Path, mutant.Line, mutant.Original, mutant.Replacement, mutant.Outcome };
 
@@ -275,8 +330,10 @@ public sealed class MutationRunnerTests
             new ManagedReferenceRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
-            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null) =>
-            NativeRunner.RunAsync(options with { Switched = switched, SwitchedTestAssembly = switchedTestAssembly },
+            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null,
+            bool coverage = false) =>
+            NativeRunner.RunAsync(options with
+                { Switched = switched, SwitchedTestAssembly = switchedTestAssembly, Coverage = coverage },
                 timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);
 

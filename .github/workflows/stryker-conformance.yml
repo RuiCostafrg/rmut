@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, operator-exclusion-gap]
+        workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, coverage-all, operator-exclusion-gap]
     env:
       WORKLOAD: ${{ matrix.workload }}
     steps:
@@ -60,6 +60,11 @@ jobs:
               assert status == "0" and pair["equivalent"], diff
               assert sorted(row["outcome"] for row in pair["rmut"]["mutants"]) == [
                   "killed", "killed", "killed", "killed", "survived",
+              ], pair["rmut"]["mutants"]
+          elif workload == "coverage-all":
+              assert status == "0" and pair["equivalent"], diff
+              assert sorted(row["outcome"] for row in pair["rmut"]["mutants"]) == [
+                  "killed", "killed", "killed", "killed", "noCoverage",
               ], pair["rmut"]["mutants"]
           elif workload == "relational-gap":
               assert status == "1" and not pair["equivalent"], diff

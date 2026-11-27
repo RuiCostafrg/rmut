@@ -1,6 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::io;
 use std::ops::Range;
+use std::path::Path;
 use tree_sitter::{Node, Parser};
 
 pub struct Mutation<'a> {
@@ -68,7 +69,12 @@ fn switch_range(node: Node<'_>, source: &str) -> Option<Range<usize>> {
     Some(node.byte_range())
 }
 
-pub fn instrument(source: &str, mutations: &[Mutation<'_>], selector: &str) -> Option<String> {
+pub fn instrument(
+    source: &str,
+    mutations: &[Mutation<'_>],
+    selector: &str,
+    coverage_path: Option<&str>,
+) -> Option<String> {
     let mut end = source.len();
     let mut pieces = Vec::new();
     for mutant in mutations.iter().rev() {
@@ -78,9 +84,40 @@ pub fn instrument(source: &str, mutations: &[Mutation<'_>], selector: &str) -> O
         let original = &source[range.clone()];
         let left = &source[range.start..mutant.start];
         let right = &source[mutant.end..range.end];
+        let selection = format!(
+            "global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\"",
+            mutant.id
+        );
+        // The absolute path also reaches children that launch with a clean
+        // environment. A failed write poisons the whole collection.
+        let condition = if let Some(path) = coverage_path {
+            let marker = |name: &str| {
+                serde_json::to_string(&Path::new(path).join(name))
+                    .expect("a UTF-8 path encodes as a JSON string")
+                    .replace('\u{85}', "\\u0085")
+                    .replace('\u{2028}', "\\u2028")
+                    .replace('\u{2029}', "\\u2029")
+            };
+            let hit = marker(&mutant.id);
+            let error = marker("probe-error");
+            format!(
+                concat!(
+                    "(global::System.Environment.GetEnvironmentVariable(\"{}\") is null ",
+                    "? ((global::System.Func<bool>)(() => {{ ",
+                    "try {{ global::System.IO.Directory.CreateDirectory({}); }} catch {{ ",
+                    "try {{ global::System.IO.Directory.CreateDirectory({}); }} catch {{ ",
+                    "global::System.Environment.FailFast(\"Rmut coverage probe failed.\"); ",
+                    "}} }} return false; }}))() : {})"
+                ),
+                selector, hit, error, selection
+            )
+        } else {
+            selection
+        };
         pieces.push(format!(
-            "(global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\" ? ({left}{}{right}) : ({original})){}",
-            mutant.id, mutant.replacement, &source[range.end..end]
+            "({condition} ? ({left}{}{right}) : ({original})){}",
+            mutant.replacement,
+            &source[range.end..end]
         ));
         end = range.start;
     }
@@ -120,6 +157,7 @@ fn replacement(operator: &str) -> Option<&'static str> {
 pub struct Discovery<'a> {
     pub mutations: Vec<Mutation<'a>>,
     pub can_instrument: bool,
+    pub can_collect_coverage: bool,
 }
 
 pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Result<Discovery<'a>> {
@@ -134,6 +172,7 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
     let mut cursor = tree.walk();
     let mut operators = Vec::new();
     let mut can_instrument = true;
+    let mut can_collect_coverage = true;
     'walk: loop {
         let node = cursor.node();
         if node.kind() == "preproc_if" || node.kind() == "#if" {
@@ -149,11 +188,38 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
                 | "interface_declaration"
                 | "enum_declaration"
                 | "delegate_declaration"
-        ) && node.child_by_field_name("name").is_some_and(|name| {
-            let name = &source[name.byte_range()];
-            name.trim_start_matches('@') == "Environment" || name.contains('\\')
-        }) {
-            can_instrument = false;
+        ) {
+            if let Some(name) = node.child_by_field_name("name") {
+                let name = source[name.byte_range()].trim_start_matches('@');
+                can_instrument &= name != "Environment" && !name.contains('\\');
+                can_collect_coverage &= !matches!(name, "Directory" | "Func");
+            }
+        }
+        // Initializer ordering and module initializer aliases are outside the
+        // coverage proof for this slice. Keep their entire batch on full-suite execution.
+        if matches!(
+            node.kind(),
+            "constructor_declaration"
+                | "field_declaration"
+                | "property_declaration"
+                | "event_field_declaration"
+                | "method_declaration"
+        ) {
+            let mut children = node.walk();
+            if node.children(&mut children).any(|child| {
+                (node.kind() == "method_declaration" && child.kind() == "attribute_list")
+                    || (child.kind() == "modifier"
+                        && matches!(&source[child.byte_range()], "static" | "const")
+                        && matches!(
+                            node.kind(),
+                            "constructor_declaration"
+                                | "field_declaration"
+                                | "property_declaration"
+                                | "event_field_declaration"
+                        ))
+            }) {
+                can_collect_coverage = false;
+            }
         }
         if node.kind() == "binary_expression" {
             if let Some(operator) = node
@@ -208,5 +274,6 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
     Ok(Discovery {
         mutations,
         can_instrument,
+        can_collect_coverage,
     })
 }

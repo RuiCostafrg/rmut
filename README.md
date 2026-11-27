@@ -34,6 +34,14 @@ same suite as running the project. Projects that configure runsettings, filters,
 adapters, or test targets through MSBuild should use project-based execution.
 The original baseline and fresh fallback still run through the test project.
 
+Add `--coverage all` to switched execution to collect suite-wide hits during the
+instrumented baseline. The original and instrumented baselines must report the
+same passing tests. Rmut reports `noCoverage` for eligible mutations with verified
+absence of hits and runs the full suite for covered mutations. Incomplete
+collection, unsupported expressions, and production static initialization use
+full-suite execution. Coverage is off by default. This mode collects suite-wide
+hits, with no per-test attribution.
+
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 
 ## Verify a local package
