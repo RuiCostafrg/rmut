@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, operator-exclusion-gap]
+        workload: [shared-operators, switched-assembly, switched-incremental, relational-gap, no-coverage-gap, operator-exclusion-gap]
     env:
       WORKLOAD: ${{ matrix.workload }}
     steps:
@@ -56,7 +56,7 @@ jobs:
           diff = pair["differential"]
           assert not diff["rmut_only"] and not diff["unfinished"], diff
 
-          if workload in ("shared-operators", "switched-assembly"):
+          if workload in ("shared-operators", "switched-assembly", "switched-incremental"):
               assert status == "0" and pair["equivalent"], diff
               assert sorted(row["outcome"] for row in pair["rmut"]["mutants"]) == [
                   "killed", "killed", "killed", "killed", "survived",

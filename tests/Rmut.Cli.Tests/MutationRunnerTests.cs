@@ -85,6 +85,34 @@ public sealed class MutationRunnerTests
     }
 
     [Fact]
+    public async Task FailedIncrementalBuildRetriesInACleanWorkspace()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """, """
+            <Project>
+              <Target Name="RequireCleanBuild" BeforeTargets="CoreCompile">
+                <Error Condition="Exists('$(IntermediateOutputPath)built')" Text="Clean build required." />
+                <WriteLinesToFile File="$(IntermediateOutputPath)built" Lines="built" />
+              </Target>
+            </Project>
+            """);
+        var log = new List<string>();
+        var report = await fixture.RunNativeAsync(switched: true, log: log.Add,
+            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true);
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        var mutant = Assert.Single(report.Mutants);
+        Assert.Equal(Outcome.Killed, mutant.Outcome);
+        Assert.Contains("Switched build ready.", log);
+        Assert.Contains($"Switched execution {mutant.Id}", log);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
     public async Task FailedSwitchedBuildFallsBackToFreshForTheWholeBatch()
     {
         using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
@@ -225,7 +253,7 @@ public sealed class MutationRunnerTests
         private readonly RunOptions options;
         private readonly Dictionary<string, string> inputs;
 
-        public Fixture(string assertion, string source = Source)
+        public Fixture(string assertion, string source = Source, string? buildTargets = null)
         {
             inputs = new()
             {
@@ -262,6 +290,9 @@ public sealed class MutationRunnerTests
                     }
                     """
             };
+
+            if (buildTargets is not null)
+                inputs.Add("Directory.Build.targets", buildTargets);
 
             foreach (var (relative, content) in inputs)
             {
