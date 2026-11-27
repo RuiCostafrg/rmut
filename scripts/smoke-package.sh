@@ -23,6 +23,15 @@ NUGET_PACKAGES="$work/packages" dotnet tool install Rmut --version "$version" \
   --tool-path "$work/tools" --source "$feed" --no-http-cache
 "$work/tools/rmut" run --project Calculator/Calculator.csproj \
   --test-project Calculator.Tests/Calculator.Tests.csproj --json "$work/report.json"
+"$work/tools/rmut" run --project Calculator/Calculator.csproj \
+  --test-project Calculator.Tests/Calculator.Tests.csproj --execution switched \
+  --json "$work/switched.json" | tee "$work/switched.log"
+test "$(grep -c '^Switched execution ' "$work/switched.log")" -eq 2
+
+for report in report switched; do
+  jq -S '.mutants |= map(del(.details))' "$work/$report.json" > "$work/$report.normalized"
+done
+diff -u "$work/report.normalized" "$work/switched.normalized"
 
 if ! jq -e '
   .baseline.outcome == "passed" and

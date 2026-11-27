@@ -32,6 +32,7 @@ struct Source {
 struct Sources {
     result: RunResult,
     paths: Vec<Source>,
+    selector: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -62,6 +63,12 @@ struct Report {
 enum Request<'a> {
     Baseline,
     Sources,
+    Prepare {
+        files: Vec<InstrumentedSource>,
+    },
+    EvaluateSwitched {
+        id: String,
+    },
     Evaluate {
         index: usize,
         mutated_source: String,
@@ -72,6 +79,12 @@ enum Request<'a> {
     Finish {
         report: &'a Report,
     },
+}
+
+#[derive(Serialize)]
+struct InstrumentedSource {
+    index: usize,
+    content: String,
 }
 
 struct Host {
@@ -130,7 +143,7 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
     let mut candidates = Vec::new();
     for source in &sources.paths {
         match discovery::discover(&mut parser, &source.path, &source.content) {
-            Ok(mutations) => candidates.push(mutations),
+            Ok(discovery) => candidates.push(discovery),
             Err(error) => {
                 let result = RunResult {
                     outcome: Outcome::RunnerError,
@@ -142,12 +155,41 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
             }
         }
     }
-    for (index, (source, mutations)) in sources.paths.iter().zip(candidates).enumerate() {
-        for mutant in mutations {
-            let mut result: RunResult = host.call(Request::Evaluate {
-                index,
-                mutated_source: mutant.apply(&source.content),
-            })?;
+    let mut switched = false;
+    if let Some(selector) = sources
+        .selector
+        .filter(|_| candidates.iter().all(|file| file.can_instrument))
+    {
+        let files: Vec<_> = sources
+            .paths
+            .iter()
+            .zip(&candidates)
+            .enumerate()
+            .filter_map(|(index, (source, file))| {
+                discovery::instrument(&source.content, &file.mutations, &selector)
+                    .map(|content| InstrumentedSource { index, content })
+            })
+            .collect();
+        if !files.is_empty() {
+            switched = host.call(Request::Prepare { files })?;
+        }
+    }
+    for (index, (source, file)) in sources.paths.iter().zip(candidates).enumerate() {
+        for mutant in file.mutations {
+            let switched_result = if switched && mutant.can_switch() {
+                host.call(Request::EvaluateSwitched {
+                    id: mutant.id.clone(),
+                })?
+            } else {
+                None
+            };
+            let mut result: RunResult = match switched_result {
+                Some(result) => result,
+                None => host.call(Request::Evaluate {
+                    index,
+                    mutated_source: mutant.apply(&source.content),
+                })?,
+            };
             result.outcome = match result.outcome {
                 Outcome::Passed => Outcome::Survived,
                 Outcome::TestFailed => Outcome::Killed,

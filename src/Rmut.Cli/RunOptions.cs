@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Rmut.Cli;
 
-internal sealed record RunOptions(string Project, string TestProject, string? Json)
+internal sealed record RunOptions(string Project, string TestProject, string? Json, bool Switched = false)
 {
     public static bool TryParse(string[] args, [NotNullWhen(true)] out RunOptions? options)
     {
@@ -13,7 +13,7 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
         var paths = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Length; i += 2)
         {
-            if (args[i] is not ("--project" or "--test-project" or "--json") ||
+            if (args[i] is not ("--project" or "--test-project" or "--json" or "--execution") ||
                 string.IsNullOrWhiteSpace(args[i + 1]) || args[i + 1].StartsWith("--") ||
                 !paths.TryAdd(args[i], args[i + 1]))
                 return false;
@@ -23,7 +23,11 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
             !paths.TryGetValue("--test-project", out var testProject))
             return false;
 
-        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"));
+        var execution = paths.GetValueOrDefault("--execution", "fresh");
+        if (execution is not ("fresh" or "switched"))
+            return false;
+
+        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched");
         return true;
     }
 }

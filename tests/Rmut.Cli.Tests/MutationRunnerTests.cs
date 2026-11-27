@@ -34,6 +34,98 @@ public sealed class MutationRunnerTests
         fixture.AssertInputsUnchanged();
     }
 
+    [Fact]
+    public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState()
+    {
+        using var fixture = new Fixture("""
+            const string marker = "mutation-test-marker";
+            Assert.False(System.IO.File.Exists(marker));
+            System.IO.File.WriteAllText(marker, "");
+            var values = new int[32];
+            System.Threading.Tasks.Parallel.For(0, values.Length, i =>
+                values[i] = Calculator.Add(3, 2));
+            Assert.All(values, value => Assert.Equal(5, value));
+            Assert.Equal(5, Calculator.Initialized);
+            Assert.Equal(1, Calculator.Next());
+            """, """
+            public static class Calculator
+            {
+                public static readonly int Initialized = Add(3, 2);
+                private static int calls;
+                public static int Add(int left, int right) => left + right;
+                public static bool Untested(int value) => value > 0;
+                public static int Next() => System.Threading.Interlocked.Increment(ref calls);
+                public static readonly int UnsupportedInitializer = 4 + 2;
+                public const int UnsupportedConstant = 3 * 0;
+            }
+            """);
+        var log = new List<string>();
+        var fresh = await fixture.RunNativeAsync();
+        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add);
+
+        Assert.Equal(Outcome.Passed, switched.Baseline.Outcome);
+        Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
+        Assert.Collection(switched.Mutants,
+            mutant => Assert.Equal(Outcome.Killed, mutant.Outcome),
+            mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
+            mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
+            mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
+        Assert.Equal(new[]
+        {
+            $"Switched execution {switched.Mutants[0].Id}",
+            $"Switched execution {switched.Mutants[1].Id}"
+        }, log.Where(line => line.StartsWith("Switched execution ", StringComparison.Ordinal)));
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task FailedSwitchedBuildFallsBackToFreshForTheWholeBatch()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+                public static int Untested() => 3 * 0;
+            }
+            """);
+        var log = new List<string>();
+        var fresh = await fixture.RunNativeAsync();
+        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add);
+
+        Assert.Equal(Outcome.Passed, switched.Baseline.Outcome);
+        Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
+        Assert.Contains("Switched build unavailable. Using fresh execution.", log);
+        Assert.Collection(switched.Mutants,
+            mutant => Assert.Equal(Outcome.Killed, mutant.Outcome),
+            mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
+    }
+
+    [Fact]
+    public async Task ConsumerEnvironmentTypeCannotInterceptTheMutationSelector()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
+            #pragma warning disable CS0436
+            namespace System
+            {
+                public static class Environment
+                {
+                    public static string GetEnvironmentVariable(string name) => "";
+                }
+            }
+
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """);
+        var log = new List<string>();
+        var report = await fixture.RunNativeAsync(switched: true, log: log.Add);
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Equal(Outcome.Killed, Assert.Single(report.Mutants).Outcome);
+        Assert.DoesNotContain(log, line => line.StartsWith("Switched execution ", StringComparison.Ordinal));
+    }
+
     private static object Identity(MutantResult mutant) =>
         new { mutant.Id, mutant.Path, mutant.Line, mutant.Original, mutant.Replacement, mutant.Outcome };
 
@@ -179,8 +271,10 @@ public sealed class MutationRunnerTests
         public Task<RunReport> RunAsync(CancellationToken cancellation = default, TimeSpan? timeout = null) =>
             new ManagedReferenceRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
 
-        public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null) =>
-            NativeRunner.RunAsync(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }, cancellation);
+        public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
+            bool switched = false, Action<string>? log = null) =>
+            NativeRunner.RunAsync(options with { Switched = switched }, timeout ?? TimeSpan.FromMinutes(2),
+                log ?? (_ => { }), cancellation);
 
         public void AssertInputsUnchanged()
         {
