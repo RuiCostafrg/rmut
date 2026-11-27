@@ -3,8 +3,15 @@
     "source": "fixtures/Conformance",
     "project": "Subject/Subject.csproj",
     "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true
+  },
+  "switched-operators": {
+    "source": "fixtures/SwitchedBenchmark",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
     "shared_operators": true,
-    "rmut_args": ["--execution", "switched"]
+    "rmut_args": ["--execution", "switched"],
+    "require_switched": true
   },
   "relational-gap": {
     "source": "fixtures/Consumer",

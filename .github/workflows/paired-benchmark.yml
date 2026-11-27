@@ -8,7 +8,7 @@ on:
       - '.github/workflows/paired-benchmark.yml'
       - 'benchmarks/run.py'
       - 'benchmarks/workloads.json'
-      - 'fixtures/Conformance/**'
+      - 'fixtures/SwitchedBenchmark/**'
       - 'src/**'
 
 permissions:
@@ -54,14 +54,13 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$parent" "$parent/cgroup.procs"
           sudo mkdir "$parent/harness"
           affinity=$(python3 -c 'import os; print(",".join(map(str, sorted(os.sched_getaffinity(0))[:2])))')
-          bash -e -c '
-            sudo sh -c '\''printf "%s" "$1" > "$2/harness/cgroup.procs"'\'' sh "$$" "$1"
-            shift
-            exec "$@"
-          ' bash "$parent" taskset --cpu-list "$affinity" \
-            python3 -B benchmarks/run.py measure shared-operators \
-            --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
-            --cgroup "$parent" --pairs 5 --warmups 1 --timeout 300 --output "$report/results"
+          (
+            # Sibling groups share the delegated parent as their migration boundary.
+            sudo sh -c 'printf "%s" "$1" > "$2/cgroup.procs"' sh "$BASHPID" "$parent/harness"
+            exec taskset --cpu-list "$affinity" python3 -B benchmarks/run.py measure switched-operators \
+              --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
+              --cgroup "$parent" --pairs 5 --warmups 1 --timeout 300 --output "$report/results"
+          )
       - name: Save benchmark evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
