@@ -231,6 +231,10 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
                     result["direct_vstest"] = "Direct VSTest console ready." in log.splitlines()
                     if not result["direct_vstest"]:
                         raise ValueError("Rmut did not use the direct VSTest console")
+                if expected_batches := spec.get("require_parallel_batches"):
+                    result["parallel_batches"] = log.splitlines().count("Switched batch completed with 2 workers.")
+                    if result["parallel_batches"] != expected_batches:
+                        raise ValueError("Rmut did not complete the expected two-worker batches")
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):

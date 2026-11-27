@@ -29,10 +29,12 @@ struct Source {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Sources {
     result: RunResult,
     paths: Vec<Source>,
     selector: Option<String>,
+    switched_workers: usize,
 }
 
 #[derive(Serialize)]
@@ -67,7 +69,7 @@ enum Request<'a> {
         files: Vec<InstrumentedSource>,
     },
     EvaluateSwitched {
-        id: String,
+        ids: Vec<&'a str>,
     },
     Evaluate {
         index: usize,
@@ -174,12 +176,47 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
             switched = host.call(Request::Prepare { files })?;
         }
     }
-    for (index, (source, file)) in sources.paths.iter().zip(candidates).enumerate() {
-        for mutant in file.mutations {
+    let mut mutants =
+        sources
+            .paths
+            .iter()
+            .zip(candidates)
+            .enumerate()
+            .flat_map(|(index, (source, file))| {
+                file.mutations
+                    .into_iter()
+                    .map(move |mutant| (index, source, mutant))
+            });
+    while let Some(first) = mutants.next() {
+        let second = if switched && sources.switched_workers == 2 {
+            mutants.next()
+        } else {
+            None
+        };
+        let batch = [Some(first), second];
+        let ids: Vec<_> = batch
+            .iter()
+            .flatten()
+            .filter(|(_, _, mutant)| switched && mutant.can_switch())
+            .map(|(_, _, mutant)| mutant.id.as_str())
+            .collect();
+        let count = ids.len();
+        let results: Vec<Option<RunResult>> = if ids.is_empty() {
+            Vec::new()
+        } else {
+            host.call(Request::EvaluateSwitched { ids })?
+        };
+        if results.len() != count {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unexpected switched result count",
+            )
+            .into());
+        }
+        let mut switched_results = results.into_iter();
+        for (index, source, mutant) in batch.into_iter().flatten() {
             let switched_result = if switched && mutant.can_switch() {
-                host.call(Request::EvaluateSwitched {
-                    id: mutant.id.clone(),
-                })?
+                switched_results.next().flatten()
             } else {
                 None
             };

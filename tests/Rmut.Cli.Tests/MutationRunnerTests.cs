@@ -35,12 +35,13 @@ public sealed class MutationRunnerTests
     }
 
     [Theory]
-    [InlineData(null, true, false)]
-    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, false)]
-    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, true)]
-    [InlineData("bin/Debug/net10.0/Missing.Tests.dll", false, false)]
+    [InlineData(null, true, false, 1)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, false, 1)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, true, 1)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, true, 2)]
+    [InlineData("bin/Debug/net10.0/Missing.Tests.dll", false, false, 1)]
     public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState(
-        string? assembly, bool expectSwitched, bool reuseBaselineBuild)
+        string? assembly, bool expectSwitched, bool reuseBaselineBuild, int switchedWorkers)
     {
         using var fixture = new Fixture("""
             const string marker = "mutation-test-marker";
@@ -67,7 +68,7 @@ public sealed class MutationRunnerTests
         var log = new List<string>();
         var fresh = await fixture.RunNativeAsync();
         var switched = await fixture.RunNativeAsync(switched: true, log: log.Add, switchedTestAssembly: assembly,
-            reuseBaselineBuild: reuseBaselineBuild);
+            reuseBaselineBuild: reuseBaselineBuild, switchedWorkers: switchedWorkers);
 
         Assert.Equal(Outcome.Passed, switched.Baseline.Outcome);
         Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
@@ -77,6 +78,7 @@ public sealed class MutationRunnerTests
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
         Assert.Equal(reuseBaselineBuild, log.Contains("Incremental switched build ready."));
+        Assert.Equal(switchedWorkers == 2, log.Contains("Switched batch completed with 2 workers."));
         string[] expectedExecutions = expectSwitched
             ? [$"Switched execution {switched.Mutants[0].Id}", $"Switched execution {switched.Mutants[1].Id}"]
             : [];
@@ -310,10 +312,11 @@ public sealed class MutationRunnerTests
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
             bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null,
-            bool reuseBaselineBuild = false) =>
+            bool reuseBaselineBuild = false, int switchedWorkers = 1) =>
             NativeRunner.RunAsync(options with
             {
-                Switched = switched, SwitchedTestAssembly = switchedTestAssembly, ReuseBaselineBuild = reuseBaselineBuild
+                Switched = switched, SwitchedTestAssembly = switchedTestAssembly, ReuseBaselineBuild = reuseBaselineBuild,
+                SwitchedWorkers = switchedWorkers
             },
                 timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);

@@ -6,7 +6,7 @@ on:
       workload:
         description: Switched execution path
         type: choice
-        options: [switched-operators, switched-assembly, switched-incremental]
+        options: [switched-operators, switched-assembly, switched-incremental, switched-parallel]
         default: switched-operators
       profile:
         description: Collect a separate switched process-tree diagnostic

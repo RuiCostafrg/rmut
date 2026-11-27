@@ -8,7 +8,7 @@ using System.Xml.Linq;
 namespace Rmut.Cli;
 
 internal sealed record SourceFile(string Path, string Content);
-internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector);
+internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector, int SwitchedWorkers);
 internal sealed record InstrumentedFile(int Index, string Content);
 internal enum SwitchedBuild { Unavailable, Clean, Incremental, IncrementalWithDirectConsole }
 
@@ -29,6 +29,8 @@ internal sealed class EvaluationSession : IDisposable
     private sealed record VSTestConsole(string Path, IReadOnlyDictionary<string, string> Environment);
     private VSTestConsole? vstestConsole;
 
+    public int SwitchedWorkers { get; }
+
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
     {
         project = ResolveProject(options.Project);
@@ -44,6 +46,7 @@ internal sealed class EvaluationSession : IDisposable
         baselineWorkspace = new Workspace(root, cancellation);
         this.timeout = timeout;
         reuseBaselineBuild = options.ReuseBaselineBuild;
+        SwitchedWorkers = options.SwitchedWorkers;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
     }
 
@@ -89,7 +92,7 @@ internal sealed class EvaluationSession : IDisposable
             files.Add(new SourceFile(displayPath, content));
         }
 
-        return new SourceList(result, files, selector);
+        return new SourceList(result, files, selector, SwitchedWorkers);
     }
 
     public async Task<RunResult> EvaluateMutantAsync(int index, string mutatedSource, CancellationToken cancellation)

@@ -42,7 +42,9 @@ before running the original project tests, then uses those intermediates
 for the switched build at the same path. When the SDK ships a VSTest
 console and there is no SDK or runner override, switched tests launch that
 console directly. A failed incremental build or control run retries from
-a clean copy.
+a clean copy. Add `--switched-workers 2` to run pairs of switched mutants
+concurrently in separate processes and workspaces. Use two workers when
+the suite's simultaneous runs can use external resources independently.
 
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 

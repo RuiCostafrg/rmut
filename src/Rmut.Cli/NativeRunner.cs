@@ -27,7 +27,7 @@ internal static class NativeRunner
     private sealed record Baseline : Request;
     private sealed record Sources : Request;
     private sealed record Prepare(InstrumentedFile[] Files) : Request;
-    private sealed record EvaluateSwitched(string Id) : Request;
+    private sealed record EvaluateSwitched(string[] Ids) : Request;
     private sealed record Evaluate(int Index, string MutatedSource) : Request;
     private sealed record Log(string Text) : Request;
     private sealed record Finish(RunReport Report) : Request;
@@ -105,11 +105,19 @@ internal static class NativeRunner
                             log("Direct VSTest console ready.");
                         await ReplyAsync(ready != SwitchedBuild.Unavailable);
                         break;
-                    case EvaluateSwitched evaluation when evaluation.Id is { Length: 64 }:
-                        var switched = await session.EvaluateSwitchedAsync(evaluation.Id, cancellation);
-                        if (switched is not null)
-                            log($"Switched execution {evaluation.Id}");
-                        await ReplyAsync(switched);
+                    case EvaluateSwitched evaluation when evaluation.Ids is { Length: > 0 } &&
+                        evaluation.Ids.Length <= session.SwitchedWorkers &&
+                        evaluation.Ids.All(id => id is { Length: 64 }):
+                        var results = await Task.WhenAll(evaluation.Ids.Select(id =>
+                            session.EvaluateSwitchedAsync(id, cancellation)));
+                        if (results.Length > 1)
+                            log($"Switched batch completed with {results.Length} workers.");
+                        for (var index = 0; index < results.Length; index++)
+                        {
+                            if (results[index] is not null)
+                                log($"Switched execution {evaluation.Ids[index]}");
+                        }
+                        await ReplyAsync(results);
                         break;
                     case Evaluate evaluation when (uint)evaluation.Index < (uint)sourceCount &&
                         evaluation.MutatedSource is not null:
