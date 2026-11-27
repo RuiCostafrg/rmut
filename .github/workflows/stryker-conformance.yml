@@ -142,10 +142,10 @@ jobs:
               print(f"{tool}: exit={result.get('exit_code')}, normalized mutants={len(result.get('mutants', []))}")
               if "error" in result:
                   print(f"::warning::{tool} comparison incomplete. See its evidence artifact.")
-          if all("error" not in pair[tool] for tool in ("stryker", "rmut")):
+          if all(pair[tool].get("mutants") for tool in ("stryker", "rmut")):
               print({key: len(rows) for key, rows in pair["differential"].items()})
               if not pair["equivalent"]:
-                  print("::warning::Completed reports differ. See the differential in pair.json.")
+                  print("::warning::Reported outcomes or inventories differ. See pair.json.")
           PYCODE
       - name: Save comparison evidence
         if: always()

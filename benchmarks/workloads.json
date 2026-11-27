@@ -45,7 +45,8 @@
     "test_project": "test/SmartEnum.UnitTests/SmartEnum.UnitTests.csproj",
     "source_patch": "patches/smart-enum.patch",
     "stryker_config": {
-      "target-framework": "net10.0"
+      "target-framework": "net10.0",
+      "verbosity": "debug"
     },
     "comparison_only": "Full-project mutant parity has not been established"
   },

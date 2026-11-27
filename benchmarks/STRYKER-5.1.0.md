@@ -76,10 +76,16 @@ tool logs, package fingerprints and normalized differences.
   comparisons. Of the 63 shared edits, 61 outcomes match. In `SmartEnum.cs`,
   changing `==` to `!=` at UTF-16 offset 16521 causes recursive operator calls
   and a test-host stack overflow in Rmut (`runnerError`). Stryker reports
-  `timedOut` for the same edit. In `SmartFlagEngine.cs`, changing `-` to `+`
+  `timedOut` for the same edit. The pinned [Stryker VsTest runner](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.TestRunner.VsTest/VsTestRunner.cs#L189-L222)
+  classifies an uncancelled session with fewer test results than expected as a
+  timeout. That status alone cannot distinguish a crash from deadline expiry.
+  In `SmartFlagEngine.cs`, changing `-` to `+`
   at offset 7299 survives Rmut's source rebuild, while Stryker reports a compile
-  error. Close the inventory gap and investigate crash classification and
-  compile rollback before using this workload for paired measurement.
+  error. The neighboring LINQ mutation replaces `enumList.Count` with
+  `enumList.Sum` and also receives a compile error. Debug logging is enabled
+  for this comparison to identify which diagnostics caused Stryker to roll
+  back each edit. Track crash classification and compile rollback separately
+  from the mutation inventory gap.
 - **FluentValidation.** The explicit project reference let Stryker select and
   build the library and discover 843 tests. It failed to build the mutated
   assembly in generated `AbstractValidator<T>` code and could not restore it
