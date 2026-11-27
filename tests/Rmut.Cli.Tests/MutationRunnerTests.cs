@@ -1,0 +1,172 @@
+using Rmut.Cli;
+using Xunit;
+
+namespace Rmut.Cli.Tests;
+
+public sealed class MutationRunnerTests
+{
+    private const string Source = """
+        public static class Calculator
+        {
+            public static int Tested() => 3 + 2;
+            public static int Untested() => 3 + 2;
+            public const int Constant = 3 * 0;
+        }
+        """;
+
+    [Fact]
+    public async Task RunReportsKillsSurvivorsAndBuildFailuresWithoutChangingInputs()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());");
+        var report = await fixture.RunAsync();
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Collection(report.Mutants,
+            result => Assert.Equal(Outcome.Killed, result.Outcome),
+            result => Assert.Equal(Outcome.Survived, result.Outcome),
+            result => Assert.Equal(Outcome.BuildFailed, result.Outcome));
+        Assert.All(report.Mutants, result => Assert.Equal("prod/Calculator.cs", result.Path));
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task FailingBaselineStopsBeforeRunningMutants()
+    {
+        using var fixture = new Fixture("Assert.Equal(99, Calculator.Tested());");
+        var report = await fixture.RunAsync();
+
+        Assert.Equal(Outcome.TestFailed, report.Baseline.Outcome);
+        Assert.Empty(report.Mutants);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task TestHostExitIsARunnerError()
+    {
+        using var fixture = new Fixture("System.Environment.Exit(42);");
+        var report = await fixture.RunAsync();
+
+        Assert.Equal(Outcome.RunnerError, report.Baseline.Outcome);
+        Assert.Empty(report.Mutants);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task DeadlineExpiryIsATimeout()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());");
+        var report = await fixture.RunAsync(timeout: TimeSpan.FromMilliseconds(1));
+
+        Assert.Equal(Outcome.TimedOut, report.Baseline.Outcome);
+        Assert.Empty(report.Mutants);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task CancelingAnActiveRunStopsItAndPreservesInputs()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var markerDirectory = new TemporaryDirectory();
+        var marker = Path.Combine(markerDirectory.Directory.FullName, "started");
+        using var fixture = new Fixture($$"""
+            System.IO.File.WriteAllText({{System.Text.Json.JsonSerializer.Serialize(marker)}}, "");
+            System.Threading.Thread.Sleep(System.TimeSpan.FromMinutes(10));
+            """);
+        var run = fixture.RunAsync(cancellation.Token);
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            while (!File.Exists(marker))
+            {
+                if (run.IsCompleted)
+                {
+                    var report = await run;
+                    Assert.Fail($"Run ended before the test started: {report.Baseline}");
+                }
+                await Task.Delay(50, deadline.Token);
+            }
+        }
+        finally
+        {
+            cancellation.Cancel();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await run.WaitAsync(TimeSpan.FromSeconds(15)));
+        fixture.AssertInputsUnchanged();
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        private readonly DirectoryInfo root = Directory.CreateTempSubdirectory("rmut-fixture-");
+        private readonly RunOptions options;
+        private readonly Dictionary<string, string> inputs;
+
+        public Fixture(string assertion)
+        {
+            inputs = new()
+            {
+                ["Directory.Build.props"] = """
+                    <Project>
+                      <PropertyGroup>
+                        <TargetFramework>net10.0</TargetFramework>
+                        <NuGetAudit>false</NuGetAudit>
+                      </PropertyGroup>
+                    </Project>
+                    """,
+                ["prod/Calculator.csproj"] = """<Project Sdk="Microsoft.NET.Sdk" />""",
+                ["prod/Calculator.cs"] = Source,
+                ["test/Calculator.Tests.csproj"] = """
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup>
+                      <ItemGroup>
+                        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+                        <PackageReference Include="xunit" Version="2.9.3" />
+                        <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+                        <ProjectReference Include="../prod/Calculator.csproj" />
+                      </ItemGroup>
+                    </Project>
+                    """,
+                ["test/CalculatorTests.cs"] = $$"""
+                    using Xunit;
+                    public sealed class CalculatorTests
+                    {
+                        [Fact]
+                        public void Check()
+                        {
+                            {{assertion}}
+                        }
+                    }
+                    """
+            };
+
+            foreach (var (relative, content) in inputs)
+            {
+                var path = Path.Combine(root.FullName, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, content);
+            }
+
+            options = new RunOptions(Path.Combine(root.FullName, "prod/Calculator.csproj"),
+                Path.Combine(root.FullName, "test/Calculator.Tests.csproj"), null);
+        }
+
+        public Task<RunReport> RunAsync(CancellationToken cancellation = default, TimeSpan? timeout = null) =>
+            new MutationRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
+
+        public void AssertInputsUnchanged()
+        {
+            Assert.Equal(inputs.Count, root.GetFiles("*", SearchOption.AllDirectories).Length);
+            foreach (var (path, content) in inputs)
+                Assert.Equal(content, File.ReadAllText(Path.Combine(root.FullName, path)));
+        }
+
+        public void Dispose() => root.Delete(recursive: true);
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public DirectoryInfo Directory { get; } = System.IO.Directory.CreateTempSubdirectory("rmut-marker-");
+        public void Dispose() => Directory.Delete(recursive: true);
+    }
+}

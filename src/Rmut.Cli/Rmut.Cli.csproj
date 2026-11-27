@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <PackageId>Rmut</PackageId>
+    <ToolCommandName>rmut</ToolCommandName>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rmut.Cli.Tests" />
+    <ProjectReference Include="../Rmut.Engine/Rmut.Engine.csproj" />
+  </ItemGroup>
+</Project>
