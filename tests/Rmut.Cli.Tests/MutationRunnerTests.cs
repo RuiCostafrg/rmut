@@ -35,9 +35,11 @@ public sealed class MutationRunnerTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll")]
-    public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState(string? assembly)
+    [InlineData(null, true)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true)]
+    [InlineData("bin/Debug/net10.0/Missing.Tests.dll", false)]
+    public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState(
+        string? assembly, bool expectSwitched)
     {
         using var fixture = new Fixture("""
             const string marker = "mutation-test-marker";
@@ -72,11 +74,10 @@ public sealed class MutationRunnerTests
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
-        Assert.Equal(new[]
-        {
-            $"Switched execution {switched.Mutants[0].Id}",
-            $"Switched execution {switched.Mutants[1].Id}"
-        }, log.Where(line => line.StartsWith("Switched execution ", StringComparison.Ordinal)));
+        string[] expectedExecutions = expectSwitched
+            ? [$"Switched execution {switched.Mutants[0].Id}", $"Switched execution {switched.Mutants[1].Id}"]
+            : [];
+        Assert.Equal(expectedExecutions, log.Where(line => line.StartsWith("Switched execution ", StringComparison.Ordinal)));
         fixture.AssertInputsUnchanged();
     }
 

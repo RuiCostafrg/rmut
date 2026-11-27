@@ -88,6 +88,14 @@ internal sealed class EvaluationSession : IDisposable
         try
         {
             template = new Workspace(root, cancellation);
+            if (switchedTestAssembly is { } assembly)
+            {
+                // Custom output directories may already contain artifacts in the input.
+                var templateAssembly = template.Map(assembly);
+                if (File.Exists(templateAssembly))
+                    File.Delete(templateAssembly);
+            }
+
             foreach (var file in files)
                 await File.WriteAllTextAsync(template.Map(originals[file.Index]), file.Content, cancellation);
 

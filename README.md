@@ -29,7 +29,7 @@ Use `--execution switched` to opt into compiling supported mutations together. R
 For single-target VSTest projects with a self-contained test configuration, pass
 `--switched-test-assembly bin/Debug/net10.0/Example.Tests.dll` to run the switched
 control and mutants directly from a built DLL. The path is relative to the test
-project directory. Use this option when running the DLL directly executes the
+project directory and must point to a DLL written by the build. Use this option when running the DLL directly executes the
 same suite as running the project. Projects that configure runsettings, filters,
 adapters, or test targets through MSBuild should use project-based execution.
 The original baseline and fresh fallback still run through the test project.
