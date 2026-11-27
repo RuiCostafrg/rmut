@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::io;
 use std::ops::Range;
 use tree_sitter::{Node, Parser};
@@ -69,26 +70,35 @@ fn switch_range(node: Node<'_>, source: &str) -> Option<Range<usize>> {
 }
 
 pub fn instrument(source: &str, mutations: &[Mutation<'_>], selector: &str) -> Option<String> {
-    let mut end = source.len();
-    let mut pieces = Vec::new();
-    for mutant in mutations.iter().rev() {
-        let Some(range) = &mutant.switch else {
+    let mut end = 0;
+    let mut instrumented = String::new();
+    // Discovery keeps all alternatives for one operator adjacent. Emit one
+    // conditional chain for its expression so only the selected alternative runs.
+    for alternatives in mutations.chunk_by(|a, b| a.start == b.start) {
+        let Some(range) = &alternatives[0].switch else {
             continue;
         };
-        let original = &source[range.clone()];
-        let left = &source[range.start..mutant.start];
-        let right = &source[mutant.end..range.end];
-        pieces.push(format!(
-            "(global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\" ? ({left}{}{right}) : ({original})){}",
-            mutant.id, mutant.replacement, &source[range.end..end]
-        ));
-        end = range.start;
+        instrumented.push_str(&source[end..range.start]);
+        instrumented.push('(');
+        for mutant in alternatives {
+            let left = &source[range.start..mutant.start];
+            let right = &source[mutant.end..range.end];
+            write!(
+                instrumented,
+                "(global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\") ? ({left}{}{right}) : ",
+                mutant.id, mutant.replacement
+            )
+            .expect("writing to a String cannot fail");
+        }
+        instrumented.push('(');
+        instrumented.push_str(&source[range.clone()]);
+        instrumented.push_str("))");
+        end = range.end;
     }
-    if pieces.is_empty() {
+    if instrumented.is_empty() {
         return None;
     }
-    let mut instrumented = source[..end].to_owned();
-    instrumented.extend(pieces.into_iter().rev());
+    instrumented.push_str(&source[end..]);
     Some(instrumented)
 }
 
@@ -98,22 +108,21 @@ impl Mutation<'_> {
     }
 }
 
-fn replacement(operator: &str) -> Option<&'static str> {
+fn replacements(operator: &str) -> &'static [&'static str] {
     match operator {
-        "+" => Some("-"),
-        "-" => Some("+"),
-        "*" => Some("/"),
-        "%" => Some("*"),
-        "/" => Some("*"),
-        "==" => Some("!="),
-        "!=" => Some("=="),
-        "<" => Some("<="),
-        "<=" => Some("<"),
-        ">" => Some(">="),
-        ">=" => Some(">"),
-        "&&" => Some("||"),
-        "||" => Some("&&"),
-        _ => None,
+        "+" => &["-"],
+        "-" => &["+"],
+        "*" => &["/"],
+        "%" | "/" => &["*"],
+        "==" => &["!="],
+        "!=" => &["=="],
+        "<" => &[">", "<="],
+        "<=" => &[">", "<"],
+        ">" => &["<", ">="],
+        ">=" => &["<", ">"],
+        "&&" => &["||"],
+        "||" => &["&&"],
+        _ => &[],
     }
 }
 
@@ -180,31 +189,34 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
     let mut offset = 0;
     let mut line = 1;
     let mut previous = 0;
-    let mutations = operators
-        .into_iter()
-        .filter_map(|(range, switch)| {
-            let original = &source[range.clone()];
-            let replacement = replacement(original)?;
-            let prefix = &source[previous..range.start];
-            offset += prefix.encode_utf16().count();
-            line += prefix
-                .matches(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
-                .count()
-                - prefix.matches("\r\n").count();
-            previous = range.start;
+    let mut mutations = Vec::new();
+    for (range, switch) in operators {
+        let original = &source[range.clone()];
+        let alternatives = replacements(original);
+        if alternatives.is_empty() {
+            continue;
+        }
+        let prefix = &source[previous..range.start];
+        offset += prefix.encode_utf16().count();
+        line += prefix
+            .matches(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
+            .count()
+            - prefix.matches("\r\n").count();
+        previous = range.start;
+        for &replacement in alternatives {
             let identity = format!("{offset}:{original}:{replacement}:{path}");
             let id = format!("{:X}", Sha256::digest(identity.as_bytes()));
-            Some(Mutation {
+            mutations.push(Mutation {
                 id,
                 line,
                 original,
                 replacement,
                 start: range.start,
                 end: range.end,
-                switch,
-            })
-        })
-        .collect();
+                switch: switch.clone(),
+            });
+        }
+    }
     Ok(Discovery {
         mutations,
         can_instrument,

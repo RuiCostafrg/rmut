@@ -26,7 +26,7 @@ NUGET_PACKAGES="$work/packages" dotnet tool install Rmut --version "$version" \
 "$work/tools/rmut" run --project Calculator/Calculator.csproj \
   --test-project Calculator.Tests/Calculator.Tests.csproj --execution switched \
   --json "$work/switched.json" | tee "$work/switched.log"
-test "$(grep -c '^Switched execution ' "$work/switched.log")" -eq 2
+test "$(grep -c '^Switched execution ' "$work/switched.log")" -eq 3
 
 for report in report switched; do
   jq -S '.mutants |= map(del(.details))' "$work/$report.json" > "$work/$report.normalized"
@@ -36,9 +36,9 @@ diff -u "$work/report.normalized" "$work/switched.normalized"
 if ! jq -e '
   .baseline.outcome == "passed" and
   ([.mutants[] | [.original, .replacement, .outcome]] | sort) ==
-    [["+", "-", "killed"], [">", ">=", "survived"]]
+    [["+", "-", "killed"], [">", "<", "survived"], [">", ">=", "survived"]]
 ' "$work/report.json" >/dev/null; then
   cat "$work/report.json" >&2
   exit 1
 fi
-echo "Package smoke test passed (one killed mutant and one survivor)."
+echo "Package smoke test passed (one killed mutant and two survivors)."
