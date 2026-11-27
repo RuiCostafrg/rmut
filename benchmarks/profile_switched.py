@@ -25,8 +25,8 @@ def child():
                             env={**os.environ, "DOTNET_HOST_PATH": command[0]})
     finished = time.time()
     output = Path(os.environ["RMUT_PROFILE_OUTPUT"])
-    prefix = output / f"{started:.6f}-{verb}-{os.getpid()}"
-    prefix.with_suffix(prefix.suffix + ".log").write_bytes(result.stdout + result.stderr)
+    log = output / f"{started:.6f}-{verb}-{os.getpid()}.log"
+    log.write_bytes(result.stdout + result.stderr)
     sys.stdout.buffer.write(result.stdout)
     sys.stderr.buffer.write(result.stderr)
     tests = []
@@ -53,7 +53,8 @@ def main():
     shutil.copytree(ROOT / spec["source"], workspace)
     with (output / "rmut.log").open("w") as log:
         subprocess.run(
-            ["strace", "-f", "-ttt", "-T", "-e", "trace=execve,execveat,wait4,exit_group,mkdir,mkdirat,copy_file_range,sendfile",
+            ["strace", "-f", "-ttt", "-T", "-s", "256", "-e",
+             "trace=execve,execveat,wait4,exit_group,mkdir,mkdirat,copy_file_range,sendfile",
              "-o", output / "process-tree.log",
              executable, "run", "--project", spec["project"], "--test-project",
              spec["test_project"], *spec["rmut_args"],
