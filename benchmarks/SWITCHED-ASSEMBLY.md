@@ -183,3 +183,24 @@ pairs of mutant testhosts overlapped by 1.01 s and 0.93 s, respectively,
 and the trace showed seven distinct testhosts. The pilot confirms overlapping
 execution in private workspaces. The parallel gate workload uses two
 workers on both tools.
+
+## Matched two-worker runs
+
+Both tools had two workers on two pinned logical CPUs. Each run used an
+Intel Xeon 6975P-C VM with starting loads of 1.67 and 2.11 respectively.
+All five measured pairs and the excluded warmup agreed on every mutation
+and used the direct console for all Rmut mutants.
+
+| Rmut configuration | Wall ratio (range) | Peak memory ratio (range) | CPU ratio (range) |
+| --- | ---: | ---: | ---: |
+| [Control first, then two workers](https://github.com/RuiCostafrg/rmut/actions/runs/46076076304/artifacts/15235636478) | 0.728× (0.701–0.803), fail | 0.746× (0.734–0.763), pass | 0.746× (0.735–0.751), pass |
+| [Control overlaps the first mutant](https://github.com/RuiCostafrg/rmut/actions/runs/46076429944/artifacts/15234744786) | 0.631× (0.599–0.687), fail | 0.746× (0.735–0.762), pass | 0.748× (0.745–0.755), pass |
+
+The latter run measured Rmut at 8.64 s median wall time (7.94–8.69 s)
+and Stryker at 12.90 s (12.65–13.70 s). This leaves a 2.19 s gap
+between the Rmut median and half the Stryker median. The diagnostic
+confirmed three waves of two distinct testhosts after the original
+baseline, with the paired testhosts overlapping by 0.91–1.04 s. The
+highest sampled PSS was again in the original build, at 306.08 MiB.
+The measured CPU use of 11.44 CPU-s implies a lower bound of 5.72 s
+on two logical CPUs even if all work were parallelizable.
