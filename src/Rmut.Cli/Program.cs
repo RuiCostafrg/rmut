@@ -28,8 +28,7 @@ try
     if (reportPath is not null && Path.Exists(reportPath))
         throw new IOException($"Report path already exists: {reportPath}");
 
-    var runner = new MutationRunner(options, TimeSpan.FromMinutes(5), Console.WriteLine);
-    var report = await runner.RunAsync(cancellation.Token);
+    var report = await NativeRunner.RunAsync(options, TimeSpan.FromMinutes(5), Console.WriteLine, cancellation.Token);
     if (reportPath is not null)
     {
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };

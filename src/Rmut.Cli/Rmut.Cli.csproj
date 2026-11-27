@@ -7,9 +7,22 @@
     <PackAsTool>true</PackAsTool>
     <PackageId>Rmut</PackageId>
     <ToolCommandName>rmut</ToolCommandName>
+    <Description>Rmut mutation testing tool for C# projects. This package contains the Rust engine for $(NETCoreSdkRuntimeIdentifier).</Description>
+    <NativeManifest>$(MSBuildProjectDirectory)/../Rmut.Native/Cargo.toml</NativeManifest>
+    <NativeTargetDirectory>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'cargo'))</NativeTargetDirectory>
+    <NativeBinaryName>rmut-native</NativeBinaryName>
+    <NativeBinaryName Condition="'$(OS)' == 'Windows_NT'">rmut-native.exe</NativeBinaryName>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Rmut.Cli.Tests" />
-    <ProjectReference Include="../Rmut.Engine/Rmut.Engine.csproj" />
+    <AssemblyMetadata Include="RmutNativeRid" Value="$(NETCoreSdkRuntimeIdentifier)" />
+    <None Include="$(NativeTargetDirectory)/release/$(NativeBinaryName)"
+          Link="$(NativeBinaryName)" CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" Pack="false" />
   </ItemGroup>
+  <Target Name="BuildNativeEngine" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(RuntimeIdentifier)' != '' And '$(RuntimeIdentifier)' != '$(NETCoreSdkRuntimeIdentifier)'"
+           Text="Rmut builds its Rust engine for the SDK host ($(NETCoreSdkRuntimeIdentifier)). Build on the target runtime." />
+    <Exec Command="cargo build --release --locked --manifest-path &quot;$(NativeManifest)&quot; --target-dir &quot;$(NativeTargetDirectory)&quot;" />
+  </Target>
 </Project>
