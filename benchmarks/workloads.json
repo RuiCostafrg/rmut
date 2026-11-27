@@ -43,20 +43,23 @@
     "revision": "3a33e77dc2693c8064b79bff2414aa1bcda92529",
     "project": "src/SmartEnum/SmartEnum.csproj",
     "test_project": "test/SmartEnum.UnitTests/SmartEnum.UnitTests.csproj",
+    "source_patch": "patches/smart-enum.patch",
     "stryker_config": {
-      "target-framework": "net10.0"
+      "target-framework": "net10.0",
+      "verbosity": "debug"
     },
-    "comparison_only": "Rmut does not select a target for multi-target libraries"
+    "comparison_only": "Full-project mutant parity has not been established"
   },
   "fluent-validation": {
     "repository": "https://github.com/FluentValidation/FluentValidation.git",
     "revision": "5903fa65863ec66dabf10646b9c09b33130a03e8",
     "project": "src/FluentValidation/FluentValidation.csproj",
     "test_project": "src/FluentValidation.Tests/FluentValidation.Tests.csproj",
+    "source_patch": "patches/fluent-validation.patch",
     "stryker_config": {
       "target-framework": "net10.0"
     },
-    "comparison_only": "Rmut does not select a target for multi-target tests"
+    "comparison_only": "Full-project mutant parity has not been established"
   },
   "operator-exclusion-gap": {
     "source": "fixtures/Conformance",

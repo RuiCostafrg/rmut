@@ -120,7 +120,7 @@ def preflight(parent, output):
         raise ValueError(f"Cgroup probe failed, see {output / 'cgroup-probe.log'}")
 
 
-def extract_source(spec, workspace, checkout):
+def extract_source(spec, workspace, checkout, manifest):
     if "source" in spec:
         shutil.copytree(ROOT / spec["source"], workspace, symlinks=True, ignore=shutil.ignore_patterns(
             "bin", "obj", "TestResults", "StrykerOutput", ".git",
@@ -134,6 +134,10 @@ def extract_source(spec, workspace, checkout):
             archive.stdout.close()
             if archive.wait():
                 raise ValueError(f"Unable to extract pinned revision {spec['revision']}")
+
+    if "source_patch" in spec:
+        patch = manifest.resolve().parent / spec["source_patch"]
+        subprocess.run(["git", "apply", str(patch)], cwd=workspace, check=True)
 
 
 def tool_command(tool, args, spec, workspace, directory, *, seed=False):
@@ -343,7 +347,7 @@ def main():
     candidate_version = re.search(r"^rmut\s+(\S+)\s+rmut\s*$", rmut_version, re.I | re.M)
     if not candidate_version:
         raise ValueError("Install Rmut with --tool-path")
-    extract_source(spec, args.output / "input", args.checkout)
+    extract_source(spec, args.output / "input", args.checkout, args.manifest)
     write_json(args.output / "environment.json", {
         "workload": args.workload, "spec": spec, "scenario": args.scenario,
         "source_sha256": source_hash(args.output / "input"),

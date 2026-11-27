@@ -62,3 +62,40 @@ Sources include [mutator enum](https://github.com/stryker-mutator/stryker-net/bl
 | `verbosity`, `log-to-file`, `diag`, `skip-version-check`. | CLI diagnostics and error fixtures | No corresponding configuration. |
 
 Sources include [configuration](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/docs/configuration.md), [CLI inputs](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.CLI/Stryker.CLI/CommandLineConfig/CommandLineConfigReader.cs), [reporter enum](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Abstractions/Options/Reporter.cs), [exit codes](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Configuration/ExitCodes.cs).
+
+## Pinned upstream comparisons
+
+The [hosted conformance run at `7f00fb5`](https://github.com/RuiCostafrg/rmut/actions/runs/46043654813)
+installed both tools and captured the two comparisons. Download
+`conformance-smart-enum` and `conformance-fluent-validation` for the raw reports,
+tool logs, package fingerprints and normalized differences.
+
+- **SmartEnum.** Both baselines passed. Stryker discovered 79 tests and reported
+  396 edits. Rmut reported 63 edits, each with a Stryker counterpart. The 333
+  Stryker-only identities establish a mutation inventory gap before test outcome
+  comparisons. Of the 63 shared edits, 61 outcomes match. In `SmartEnum.cs`,
+  changing `==` to `!=` at UTF-16 offset 16521 causes recursive operator calls
+  and a test-host stack overflow in Rmut (`runnerError`). Stryker reports
+  `timedOut` for the same edit. The pinned [Stryker VsTest runner](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.TestRunner.VsTest/VsTestRunner.cs#L189-L222)
+  classifies an uncancelled session with fewer test results than expected as a
+  timeout. That status alone cannot distinguish a crash from deadline expiry.
+  In `SmartFlagEngine.cs`, changing `-` to `+`
+  at offset 7299 survives Rmut's source rebuild, while Stryker reports a compile
+  error. The neighboring LINQ mutation replaces `enumList.Count` with
+  `enumList.Sum` and also receives a compile error. Debug logging is enabled
+  for this comparison to identify which diagnostics caused Stryker to roll
+  back each edit. Track crash classification and compile rollback separately
+  from the mutation inventory gap.
+- **FluentValidation.** The explicit project reference let Stryker select and
+  build the library and discover 843 tests. It failed to build the mutated
+  assembly in generated `AbstractValidator<T>` code and could not restore it
+  to a buildable state. Stryker exited zero without a mutation report. Rmut
+  passed the baseline and stopped at conditional compilation in
+  `DefaultValidatorExtensions.cs`. Rmut needs discovery using the evaluated
+  target's preprocessor symbols. The Stryker generator failure needs an
+  upstream reproduction or a reference version that can run the pinned
+  source and generator unchanged.
+
+Both workloads remain compare-only. Green capture jobs indicate that the
+workflow saved evidence. Neither workload established parity, so no elapsed
+time, CPU or memory comparison was collected.

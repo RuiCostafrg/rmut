@@ -31,7 +31,7 @@ python3 -B benchmarks/run.py compare shared-operators \
 | `smart-enum` | Small real library and its unit tests. The pinned upstream project is multi-targeted. |
 | `fluent-validation` | Larger real library and its unit tests. The pinned test project targets multiple runtimes. |
 
-For a real project, clone the repository listed in [workloads.json](workloads.json), fetch the exact revision, and pass the checkout with `--checkout`. The harness extracts that revision with `git archive`. The checkout may contain unrelated local edits. The gap and real-project workloads are limited to compare mode. The current compatibility gaps are listed in the [feature inventory](STRYKER-5.1.0.md).
+For a real project, clone the repository listed in [workloads.json](workloads.json), fetch the exact revision, and pass the checkout with `--checkout`. The harness extracts that revision with `git archive`. The checkout may contain unrelated local edits. The manifest applies a shared build patch to the archived source before making the two tool copies. SmartEnum uses its .NET 10 library and unit test targets. FluentValidation uses its .NET 10 unit test target with its existing .NET 8 production target and an explicit reference to the library already in its dependency graph. Both comparisons use the selected upstream test project and all default mutators. The gap and real-project workloads are limited to compare mode. The current compatibility gaps are listed in the [feature inventory](STRYKER-5.1.0.md).
 
 ## Measure the switched runner
 

@@ -1,0 +1,20 @@
+diff --git a/src/FluentValidation.Tests/FluentValidation.Tests.csproj b/src/FluentValidation.Tests/FluentValidation.Tests.csproj
+index 6ae063b..99c4563 100644
+--- a/src/FluentValidation.Tests/FluentValidation.Tests.csproj
++++ b/src/FluentValidation.Tests/FluentValidation.Tests.csproj
+@@ -1,6 +1,6 @@
+ ﻿<Project Sdk="Microsoft.NET.Sdk">
+   <PropertyGroup>
+-    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
++    <TargetFramework>net10.0</TargetFramework>
+     <IsPackable>false</IsPackable>
+     <OutputType>Library</OutputType>
+   </PropertyGroup>
+@@ -20,6 +20,7 @@
+   </ItemGroup>
+   <ItemGroup>
+     <ProjectReference Include="..\FluentValidation.DependencyInjectionExtensions\FluentValidation.DependencyInjectionExtensions.csproj" />
++    <ProjectReference Include="..\FluentValidation\FluentValidation.csproj" />
+   </ItemGroup>
+   <ItemGroup>
+     <Compile Update="TestMessages.Designer.cs">
