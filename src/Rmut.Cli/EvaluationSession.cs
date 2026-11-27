@@ -6,7 +6,8 @@ using System.Xml.Linq;
 namespace Rmut.Cli;
 
 internal sealed record SourceFile(string Path, string Content);
-internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths);
+internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector);
+internal sealed record InstrumentedFile(int Index, string Content);
 
 internal sealed class EvaluationSession : IDisposable
 {
@@ -16,6 +17,8 @@ internal sealed class EvaluationSession : IDisposable
     private readonly Workspace baselineWorkspace;
     private readonly TimeSpan timeout;
     private readonly List<string> originals = [];
+    private readonly string? selector;
+    private Workspace? switchedWorkspace;
 
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
     {
@@ -24,6 +27,7 @@ internal sealed class EvaluationSession : IDisposable
         root = Workspace.FindRoot(project, testProject);
         baselineWorkspace = new Workspace(root, cancellation);
         this.timeout = timeout;
+        selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
     }
 
     public Task<RunResult> BaselineAsync(CancellationToken cancellation) =>
@@ -49,7 +53,7 @@ internal sealed class EvaluationSession : IDisposable
             files.Add(new SourceFile(displayPath, content));
         }
 
-        return new SourceList(result, files);
+        return new SourceList(result, files, selector);
     }
 
     public async Task<RunResult> EvaluateMutantAsync(int index, string mutatedSource, CancellationToken cancellation)
@@ -67,7 +71,65 @@ internal sealed class EvaluationSession : IDisposable
         }
     }
 
-    public void Dispose() => baselineWorkspace.Dispose();
+    public async Task<bool> PrepareSwitchedAsync(IReadOnlyList<InstrumentedFile> files, CancellationToken cancellation)
+    {
+        if (selector is null)
+            return false;
+
+        Workspace? template = null;
+        try
+        {
+            template = new Workspace(root, cancellation);
+            foreach (var file in files)
+                await File.WriteAllTextAsync(template.Map(originals[file.Index]), file.Content, cancellation);
+
+            var build = await BuildAsync(template.Map(testProject), cancellation, rejectFrameworkTypeConflicts: true);
+            if (build.Outcome != Outcome.Passed)
+                return false;
+
+            // Run a control with every switch off in the same kind of private copy
+            // used for mutants. Keep the compiled template pristine.
+            using var control = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
+            var result = await TestAsync(control.Map(template.Map(testProject)), cancellation);
+            if (result.Outcome != Outcome.Passed)
+                return false;
+
+            switchedWorkspace = template;
+            template = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            return false;
+        }
+        finally
+        {
+            template?.Dispose();
+        }
+    }
+
+    public async Task<RunResult?> EvaluateSwitchedAsync(string id, CancellationToken cancellation)
+    {
+        if (switchedWorkspace is not { } template || selector is null)
+            return null;
+
+        try
+        {
+            using var workspace = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
+            var result = await TestAsync(workspace.Map(template.Map(testProject)), cancellation, new(selector, id));
+            return result.Outcome is Outcome.Passed or Outcome.TestFailed ? result : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    public void Dispose()
+    {
+        using var baseline = baselineWorkspace;
+        switchedWorkspace?.Dispose();
+    }
 
     private async Task<(RunResult Result, string[] Paths)> DiscoverSourcesAsync(
         string project, string workspace, CancellationToken cancellation)
@@ -106,17 +168,32 @@ internal sealed class EvaluationSession : IDisposable
 
     private async Task<RunResult> EvaluateAsync(string testProject, CancellationToken cancellation)
     {
-        var directory = Path.GetDirectoryName(testProject)!;
-        var build = await DotnetProcess.RunAsync(directory, timeout, cancellation,
-            "build", testProject, "--disable-build-servers", "--nologo");
+        var build = await BuildAsync(testProject, cancellation);
+        return build.Outcome == Outcome.Passed ? await TestAsync(testProject, cancellation) : build;
+    }
+
+    private async Task<RunResult> BuildAsync(string testProject, CancellationToken cancellation,
+        bool rejectFrameworkTypeConflicts = false)
+    {
+        string[] arguments = ["build", testProject, "--disable-build-servers", "--nologo"];
+        if (rejectFrameworkTypeConflicts)
+            arguments = [.. arguments, "-warnaserror:CS0436"];
+        var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation, arguments);
         if (build.TimedOut)
             return new RunResult(Outcome.TimedOut, "Build timed out.");
-        if (build.ExitCode != 0)
-            return new RunResult(Outcome.BuildFailed, build.Diagnostics);
+        return build.ExitCode == 0 ? new RunResult(Outcome.Passed) : new RunResult(Outcome.BuildFailed, build.Diagnostics);
+    }
 
+    private async Task<RunResult> TestAsync(string testProject, CancellationToken cancellation,
+        KeyValuePair<string, string>? selection = null)
+    {
+        var directory = Path.GetDirectoryName(testProject)!;
         var results = Path.Combine(directory, "TestResults", Guid.NewGuid().ToString("N"));
-        var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, "test", testProject,
-            "--no-build", "--no-restore", "--logger", "trx;LogFilePrefix=rm", "--results-directory", results);
+        string[] arguments = ["test", testProject, "--no-build", "--no-restore",
+            "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
+        if (selection is { } selector)
+            arguments = [.. arguments, "--environment", $"{selector.Key}={selector.Value}"];
+        var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, arguments);
         if (test.TimedOut)
             return new RunResult(Outcome.TimedOut, "Tests timed out.");
 

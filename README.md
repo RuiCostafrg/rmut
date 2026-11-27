@@ -20,6 +20,14 @@ rmut run --project src/MyApp/MyApp.csproj --test-project tests/MyApp.Tests/MyApp
 
 Add `--json report.json` to save the baseline and individual mutant outcomes.
 
+### Execution modes
+
+Fresh execution is the default. It copies the workspace, restores and builds the test project and its references, and runs the full suite for each mutant.
+
+Use `--execution switched` to opt into compiling supported mutations together. Rmut currently switches single-line binary expressions that form the entire body of an expression-bodied `int` or `bool` method, with operands drawn from `int` parameters and decimal integer literals. A separate test process selects one mutation at startup and runs the full suite in a private copy of the build. Unsupported mutations, failed instrumented builds or control runs, and indeterminate switched results use fresh execution.
+
+Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
+
 ## Verify a local package
 
 Run these commands from the repository root with the .NET 10 SDK, Bash, and jq.
@@ -31,7 +39,7 @@ dotnet pack src/Rmut.Cli/Rmut.Cli.csproj --configuration Release \
 bash scripts/smoke-package.sh "$feed" 0.0.0-ci
 ```
 
-The smoke test installs the package from the local feed and runs it from a temporary consumer directory. The fixture expects `+` changed to `-` to be killed and `>` changed to `>=` to survive.
+The smoke test installs the package from the local feed and runs it from a temporary consumer directory. It compares fresh and switched execution and checks that both mutants used the switched build. The fixture expects `+` changed to `-` to be killed and `>` changed to `>=` to survive.
 
 The installed-package smoke test passed with .NET SDK 10.0.404, xUnit 2.9.3, and VSTest 18.12.0 on Linux ARM64. The local PRoot environment required setting `VSTestConsolePath` to the 18.12.0 console from `Microsoft.TestPlatform.CLI` to work around SDK-bundled VSTest host detection. GitHub Actions is configured for Ubuntu 24.04. [VSTest host detection issue](https://github.com/microsoft/vstest/issues/16446)
 

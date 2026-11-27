@@ -10,7 +10,7 @@ internal sealed class Workspace : IDisposable
     public string SourceRoot { get; }
     public string Root { get; }
 
-    public Workspace(string sourceRoot, CancellationToken cancellation)
+    public Workspace(string sourceRoot, CancellationToken cancellation, bool includeBuildOutputs = false)
     {
         SourceRoot = sourceRoot;
         Root = Directory.CreateTempSubdirectory("rmut-").FullName;
@@ -18,7 +18,7 @@ internal sealed class Workspace : IDisposable
         {
             if (Contains(SourceRoot, Root))
                 throw new IOException("The temporary directory is inside the input workspace.");
-            CopyDirectory(SourceRoot, Root, cancellation);
+            CopyDirectory(SourceRoot, Root, cancellation, includeBuildOutputs);
         }
         catch
         {
@@ -61,7 +61,7 @@ internal sealed class Workspace : IDisposable
             !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
-    private static void CopyDirectory(string source, string destination, CancellationToken cancellation)
+    private static void CopyDirectory(string source, string destination, CancellationToken cancellation, bool includeBuildOutputs)
     {
         foreach (var entry in new DirectoryInfo(source).EnumerateFileSystemInfos())
         {
@@ -72,10 +72,10 @@ internal sealed class Workspace : IDisposable
             var target = Path.Combine(destination, entry.Name);
             if (entry is DirectoryInfo)
             {
-                if (ExcludedDirectories.Contains(entry.Name))
+                if (!includeBuildOutputs && ExcludedDirectories.Contains(entry.Name))
                     continue;
                 Directory.CreateDirectory(target);
-                CopyDirectory(entry.FullName, target, cancellation);
+                CopyDirectory(entry.FullName, target, cancellation, includeBuildOutputs);
             }
             else if (entry.Name != ".git")
             {

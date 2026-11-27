@@ -18,12 +18,16 @@ internal static class NativeRunner
     [JsonPolymorphic(TypeDiscriminatorPropertyName = "command")]
     [JsonDerivedType(typeof(Baseline), "baseline")]
     [JsonDerivedType(typeof(Sources), "sources")]
+    [JsonDerivedType(typeof(Prepare), "prepare")]
+    [JsonDerivedType(typeof(EvaluateSwitched), "evaluateSwitched")]
     [JsonDerivedType(typeof(Evaluate), "evaluate")]
     [JsonDerivedType(typeof(Log), "log")]
     [JsonDerivedType(typeof(Finish), "finish")]
     private abstract record Request;
     private sealed record Baseline : Request;
     private sealed record Sources : Request;
+    private sealed record Prepare(InstrumentedFile[] Files) : Request;
+    private sealed record EvaluateSwitched(string Id) : Request;
     private sealed record Evaluate(int Index, string MutatedSource) : Request;
     private sealed record Log(string Text) : Request;
     private sealed record Finish(RunReport Report) : Request;
@@ -86,6 +90,19 @@ internal static class NativeRunner
                         var sources = await session.DiscoverAsync(cancellation);
                         sourceCount = sources.Paths.Count;
                         await ReplyAsync(sources);
+                        break;
+                    case Prepare preparation when preparation.Files is { Length: > 0 } &&
+                        preparation.Files.All(file => file is not null && (uint)file.Index < (uint)sourceCount &&
+                            file.Content is not null):
+                        var ready = await session.PrepareSwitchedAsync(preparation.Files, cancellation);
+                        log(ready ? "Switched build ready." : "Switched build unavailable. Using fresh execution.");
+                        await ReplyAsync(ready);
+                        break;
+                    case EvaluateSwitched evaluation when evaluation.Id is { Length: 64 }:
+                        var switched = await session.EvaluateSwitchedAsync(evaluation.Id, cancellation);
+                        if (switched is not null)
+                            log($"Switched execution {evaluation.Id}");
+                        await ReplyAsync(switched);
                         break;
                     case Evaluate evaluation when (uint)evaluation.Index < (uint)sourceCount &&
                         evaluation.MutatedSource is not null:
