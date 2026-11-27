@@ -234,6 +234,8 @@ internal sealed class EvaluationSession : IDisposable
                     ? targetFile : null;
                 var sdk = properties.GetProperty("MSBuildBinPath").GetString();
                 if (sdk is not null && Path.IsPathFullyQualified(sdk) &&
+                    Environment.GetEnvironmentVariable("VSTEST_CONSOLE_PATH") is null &&
+                    Environment.GetEnvironmentVariable("DOTNET_TEST_RUNNER") is null &&
                     baselineBuildSnapshot is { } snapshot &&
                     !HasWorkspaceSdkOverride(project, workspace) &&
                     !HasWorkspaceSdkOverride(baselineWorkspace.Map(testProject), workspace) &&

@@ -39,8 +39,8 @@ for projects whose restore and build inputs are independent of the
 instrumented source bodies. Baseline tests must finish all writes to the
 workspace before returning. Rmut snapshots the successful baseline build
 before running the original project tests, then uses those intermediates
-for the switched build at the same path. When the workspace has no SDK
-override and the SDK ships a VSTest console, switched tests launch that
+for the switched build at the same path. When the SDK ships a VSTest
+console and there is no SDK or runner override, switched tests launch that
 console directly. A failed incremental build or control run retries from
 a clean copy.
 
