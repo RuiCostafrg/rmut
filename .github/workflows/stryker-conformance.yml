@@ -1,0 +1,86 @@
+name: Stryker.NET conformance
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/stryker-conformance.yml'
+      - 'benchmarks/**'
+      - 'fixtures/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [shared-operators, relational-gap, no-coverage-gap, operator-exclusion-gap]
+    env:
+      WORKLOAD: ${{ matrix.workload }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify harness logic
+        run: python3 -B -m unittest discover -s benchmarks -v
+      - name: Install pinned tools
+        run: |
+          dotnet tool install dotnet-stryker --version 5.1.0 --tool-path "$RUNNER_TEMP/stryker"
+          dotnet pack src/Rmut.Cli --configuration Release -p:PackageVersion=0.0.1-conformance \
+            --output "$RUNNER_TEMP/feed"
+          dotnet tool install Rmut --version 0.0.1-conformance --tool-path "$RUNNER_TEMP/rmut" \
+            --add-source "$RUNNER_TEMP/feed"
+      - name: Compare mutant reports
+        run: |
+          results="$RUNNER_TEMP/result"
+          status=0
+          python3 -B benchmarks/run.py compare "$WORKLOAD" \
+            --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
+            --output "$results" --timeout 300 || status=$?
+          python3 - "$results/pair-01/pair.json" "$WORKLOAD" "$status" <<'PY'
+          import json
+          import sys
+
+          path, workload, status = sys.argv[1:]
+          with open(path) as stream:
+              pair = json.load(stream)
+          for tool in ("stryker", "rmut"):
+              assert pair[tool].get("exit_code") == 0 and "error" not in pair[tool], pair[tool]
+          diff = pair["differential"]
+          assert not diff["rmut_only"] and not diff["unfinished"], diff
+
+          if workload == "shared-operators":
+              assert status == "0" and pair["equivalent"], diff
+              assert sorted(row["outcome"] for row in pair["rmut"]["mutants"]) == [
+                  "killed", "killed", "killed", "killed", "survived",
+              ], pair["rmut"]["mutants"]
+          elif workload == "relational-gap":
+              assert status == "1" and not pair["equivalent"], diff
+              assert len(diff["stryker_only"]) == 1 and diff["stryker_only"][0][2:] == [">", "<"], diff
+              assert not diff["outcome_mismatches"], diff
+          else:
+              assert status == "1" and not pair["equivalent"], diff
+              assert not diff["stryker_only"] and len(diff["outcome_mismatches"]) == 1, diff
+              mismatch = diff["outcome_mismatches"][0]
+              expected = ("noCoverage", "survived") if workload == "no-coverage-gap" else ("ignored", "killed")
+              assert (mismatch["stryker"]["outcome"], mismatch["rmut"]["outcome"]) == expected, diff
+          PY
+      - name: Save conformance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-${{ matrix.workload }}
+          path: |
+            ${{ runner.temp }}/result/*.json
+            ${{ runner.temp }}/result/pair-*/pair.json
+            ${{ runner.temp }}/result/pair-*/*/*.log
+            ${{ runner.temp }}/result/pair-*/*/*.json
+            ${{ runner.temp }}/result/pair-*/stryker/reports/*.json
+          if-no-files-found: ignore
