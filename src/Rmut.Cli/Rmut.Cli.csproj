@@ -14,6 +14,7 @@
     <NativeBinaryName Condition="'$(OS)' == 'Windows_NT'">rmut-native.exe</NativeBinaryName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <InternalsVisibleTo Include="Rmut.Cli.Tests" />
     <AssemblyMetadata Include="RmutNativeRid" Value="$(NETCoreSdkRuntimeIdentifier)" />
     <None Include="$(NativeTargetDirectory)/release/$(NativeBinaryName)"

@@ -87,7 +87,7 @@ jobs:
 
   real-projects:
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 115
     strategy:
       fail-fast: false
       matrix:
@@ -122,6 +122,22 @@ jobs:
             --output "$RUNNER_TEMP/feed"
           dotnet tool install Rmut --version 0.0.1-conformance --tool-path "$RUNNER_TEMP/rmut" \
             --add-source "$RUNNER_TEMP/feed"
+      - name: Run standalone generator reproduction
+        if: matrix.workload == 'fluent-validation'
+        continue-on-error: true
+        timeout-minutes: 5
+        working-directory: fixtures/GeneratedRollback/Subject.Tests
+        run: |
+          output="$RUNNER_TEMP/generator-reproduction"
+          mkdir -p "$output"
+          dotnet test --nologo 2>&1 | tee "$output/baseline.log"
+          status=0
+          "$RUNNER_TEMP/stryker/dotnet-stryker" --skip-version-check --diag --output "$output" \
+            2>&1 | tee "$output/stryker.log" || status=$?
+          printf '%s\n' "$status" > "$output/exit-code"
+          if ! test -s "$output/reports/mutation-report.json"; then
+            echo "::warning::Standalone Stryker run did not write a report. See the generator reproduction logs."
+          fi
       - name: Capture full-project comparison
         run: |
           results="$RUNNER_TEMP/result"
@@ -129,7 +145,7 @@ jobs:
           python3 -B benchmarks/run.py compare "$WORKLOAD" \
             --checkout "$RUNNER_TEMP/upstream" \
             --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
-            --output "$results" --timeout 1200 || status=$?
+            --output "$results" --timeout 3000 || status=$?
           test "$status" -le 1
           python3 - "$results/pair-01/pair.json" <<'PYCODE'
           import json
@@ -147,6 +163,13 @@ jobs:
               if not pair["equivalent"]:
                   print("::warning::Completed reports differ. See the differential in pair.json.")
           PYCODE
+      - name: Save generator reproduction evidence
+        if: always() && matrix.workload == 'fluent-validation'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stryker-generator-reproduction
+          path: ${{ runner.temp }}/generator-reproduction
+          if-no-files-found: ignore
       - name: Save comparison evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

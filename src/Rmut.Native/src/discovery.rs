@@ -122,9 +122,14 @@ pub struct Discovery<'a> {
     pub can_instrument: bool,
 }
 
-pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Result<Discovery<'a>> {
+pub fn discover<'a>(
+    parser: &mut Parser,
+    path: &str,
+    source: &'a str,
+    active_source: &str,
+) -> io::Result<Discovery<'a>> {
     let tree = parser
-        .parse(source, None)
+        .parse(active_source, None)
         .ok_or_else(|| io::Error::other("C# parsing failed"))?;
     if tree.root_node().has_error() {
         return Err(io::Error::other(
@@ -137,7 +142,7 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
     'walk: loop {
         let node = cursor.node();
         if node.kind() == "preproc_if" || node.kind() == "#if" {
-            return Err(io::Error::other("conditional compilation is unsupported"));
+            return Err(io::Error::other("unresolved conditional compilation"));
         }
         // A project-local type can shadow the framework selector even when
         // the compiler's type-conflict warning has been suppressed.

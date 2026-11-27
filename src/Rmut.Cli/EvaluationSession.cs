@@ -2,10 +2,11 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace Rmut.Cli;
 
-internal sealed record SourceFile(string Path, string Content);
+internal sealed record SourceFile(string Path, string Content, string? ActiveContent);
 internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector);
 internal sealed record InstrumentedFile(int Index, string Content);
 
@@ -43,7 +44,7 @@ internal sealed class EvaluationSession : IDisposable
 
     public async Task<SourceList> DiscoverAsync(CancellationToken cancellation)
     {
-        var (result, paths) = await DiscoverSourcesAsync(
+        var (result, paths, parseOptions) = await DiscoverSourcesAsync(
             baselineWorkspace.Map(project), baselineWorkspace.Root, cancellation);
         var files = new List<SourceFile>();
         originals.Clear();
@@ -57,8 +58,13 @@ internal sealed class EvaluationSession : IDisposable
 
             var displayPath = relativePath.Replace(Path.DirectorySeparatorChar, '/');
             var content = await File.ReadAllTextAsync(originalPath, cancellation);
+            var tree = CSharpSyntaxTree.ParseText(content, parseOptions, cancellationToken: cancellation);
+            var syntax = tree.GetRoot(cancellation);
+            if (SourceProjection.IsGenerated(source, syntax))
+                continue;
+
             originals.Add(originalPath);
-            files.Add(new SourceFile(displayPath, content));
+            files.Add(new SourceFile(displayPath, content, SourceProjection.ActiveText(content, syntax)));
         }
 
         return new SourceList(result, files, selector);
@@ -147,38 +153,55 @@ internal sealed class EvaluationSession : IDisposable
         switchedWorkspace?.Dispose();
     }
 
-    private async Task<(RunResult Result, string[] Paths)> DiscoverSourcesAsync(
+    private async Task<(RunResult Result, string[] Paths, CSharpParseOptions? ParseOptions)> DiscoverSourcesAsync(
         string project, string workspace, CancellationToken cancellation)
     {
         var process = await DotnetProcess.RunAsync(Path.GetDirectoryName(project)!, timeout, cancellation,
-            "msbuild", project, "-nologo", "-getProperty:TargetFrameworks", "-getItem:Compile");
+            "msbuild", project, "-nologo", "-target:Compile", "-property:SkipCompilerExecution=true",
+            "-property:ProvideCommandLineArgs=true",
+            $"-property:NonExistentFile=rmut-{Guid.NewGuid():N}.missing",
+            "-getProperty:TargetFrameworks", "-getItem:Compile,CscCommandLineArgs");
         if (process.TimedOut)
-            return (new RunResult(Outcome.TimedOut, "Production source discovery timed out."), []);
+            return (new RunResult(Outcome.TimedOut, "Production source discovery timed out."), [], null);
         if (process.ExitCode != 0)
-            return (new RunResult(Outcome.RunnerError, process.Diagnostics), []);
+            return (new RunResult(Outcome.RunnerError, process.Diagnostics), [], null);
 
         try
         {
             using var document = JsonDocument.Parse(process.Output);
-            var frameworks = document.RootElement.GetProperty("Properties").GetProperty("TargetFrameworks").GetString();
+            var properties = document.RootElement.GetProperty("Properties");
+            var frameworks = properties.GetProperty("TargetFrameworks").GetString();
             if (!string.IsNullOrWhiteSpace(frameworks))
-                return (new RunResult(Outcome.RunnerError, "The production project must use TargetFramework."), []);
+                return (new RunResult(Outcome.RunnerError, "The production project must use TargetFramework."), [], null);
 
-            var paths = document.RootElement.GetProperty("Items").GetProperty("Compile").EnumerateArray()
+            var items = document.RootElement.GetProperty("Items");
+            var arguments = items.GetProperty("CscCommandLineArgs").EnumerateArray()
+                .Select(item => item.GetProperty("Identity").GetString()!)
+                .ToArray();
+            if (arguments.Length == 0)
+                return (new RunResult(Outcome.RunnerError, "MSBuild did not return C# compiler inputs."), [], null);
+
+            var compiler = CSharpCommandLineParser.Default.Parse(arguments, Path.GetDirectoryName(project)!, null);
+            var compilerSources = compiler.SourceFiles.Select(file => file.Path).ToHashSet(
+                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+            var paths = items.GetProperty("Compile").EnumerateArray()
+                .Where(item => !string.Equals(item.TryGetProperty("AutoGen", out var autoGen) ? autoGen.GetString() : null,
+                    "true", StringComparison.OrdinalIgnoreCase))
                 .Select(item => item.GetProperty("FullPath").GetString()!)
-                .Where(path => Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+                .Where(path => compilerSources.Contains(path) &&
+                    Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
                 .Distinct()
                 .Order(StringComparer.Ordinal)
                 .ToArray();
             var externalSource = paths.FirstOrDefault(path => !Workspace.Contains(workspace, path));
             if (externalSource is not null)
-                return (new RunResult(Outcome.RunnerError, $"Production source is outside the workspace: {externalSource}"), []);
+                return (new RunResult(Outcome.RunnerError, $"Production source is outside the workspace: {externalSource}"), [], null);
 
-            return (new RunResult(Outcome.Passed), paths);
+            return (new RunResult(Outcome.Passed), paths, compiler.ParseOptions);
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            return (new RunResult(Outcome.RunnerError, $"Invalid MSBuild source list: {ex.Message}"), []);
+            return (new RunResult(Outcome.RunnerError, $"Invalid MSBuild source list: {ex.Message}"), [], null);
         }
     }
 
