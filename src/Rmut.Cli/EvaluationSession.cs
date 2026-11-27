@@ -41,7 +41,7 @@ internal sealed class EvaluationSession : IDisposable
         coverlet = options.Coverlet;
         if (options.BaselineResults is { } results)
         {
-            baselineResults = Path.GetFullPath(results);
+            baselineResults = Path.TrimEndingDirectorySeparator(Path.GetFullPath(results));
             if (Path.Exists(baselineResults))
                 throw new IOException($"Baseline results directory already exists: {baselineResults}");
         }
