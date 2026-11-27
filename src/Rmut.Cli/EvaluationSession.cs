@@ -1,48 +1,41 @@
 using System.ComponentModel;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Xml;
 using System.Xml.Linq;
-using Rmut.Engine;
 
 namespace Rmut.Cli;
 
-internal enum Outcome
-{
-    Passed, TestFailed, Killed, Survived, BuildFailed, TimedOut, RunnerError
-}
+internal sealed record SourceFile(string Path, string Content);
+internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths);
 
-internal sealed record RunResult(Outcome Outcome, string? Details = null);
-internal sealed record MutantResult(
-    string Id, string Path, int Line, string Original, string Replacement, Outcome Outcome, string? Details);
-internal sealed record RunReport(
-    RunResult Baseline, IReadOnlyList<MutantResult> Mutants,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RunResult? Error = null);
-
-internal sealed class MutationRunner(RunOptions options, TimeSpan timeout, Action<string> log)
+internal sealed class EvaluationSession : IDisposable
 {
-    public async Task<RunReport> RunAsync(CancellationToken cancellation)
+    private readonly string project;
+    private readonly string testProject;
+    private readonly string root;
+    private readonly Workspace baselineWorkspace;
+    private readonly TimeSpan timeout;
+    private readonly List<string> originals = [];
+
+    public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
     {
-        var project = ResolveProject(options.Project);
-        var testProject = ResolveProject(options.TestProject);
-        var root = Workspace.FindRoot(project, testProject);
-        var results = new List<MutantResult>();
+        project = ResolveProject(options.Project);
+        testProject = ResolveProject(options.TestProject);
+        root = Workspace.FindRoot(project, testProject);
+        baselineWorkspace = new Workspace(root, cancellation);
+        this.timeout = timeout;
+    }
 
-        using var baselineWorkspace = new Workspace(root, cancellation);
-        var baseline = await EvaluateAsync(baselineWorkspace.Map(testProject), cancellation);
-        LogResult("Baseline", baseline);
-        if (baseline.Outcome != Outcome.Passed)
-            return new RunReport(baseline, results);
+    public Task<RunResult> BaselineAsync(CancellationToken cancellation) =>
+        EvaluateAsync(baselineWorkspace.Map(testProject), cancellation);
 
-        var sources = await DiscoverSourcesAsync(
+    public async Task<SourceList> DiscoverAsync(CancellationToken cancellation)
+    {
+        var (result, paths) = await DiscoverSourcesAsync(
             baselineWorkspace.Map(project), baselineWorkspace.Root, cancellation);
-        if (sources.Result.Outcome != Outcome.Passed)
-        {
-            LogResult("Source discovery", sources.Result);
-            return new RunReport(baseline, results, sources.Result);
-        }
-
-        foreach (var source in sources.Paths)
+        var files = new List<SourceFile>();
+        originals.Clear();
+        foreach (var source in paths)
         {
             cancellation.ThrowIfCancellationRequested();
             var relativePath = Path.GetRelativePath(baselineWorkspace.Root, source);
@@ -52,47 +45,29 @@ internal sealed class MutationRunner(RunOptions options, TimeSpan timeout, Actio
 
             var displayPath = relativePath.Replace(Path.DirectorySeparatorChar, '/');
             var content = await File.ReadAllTextAsync(originalPath, cancellation);
-            foreach (var mutant in MutationEngine.Discover(displayPath, content))
-            {
-                cancellation.ThrowIfCancellationRequested();
-                RunResult result;
-                try
-                {
-                    using var workspace = new Workspace(root, cancellation);
-                    await File.WriteAllTextAsync(workspace.Map(originalPath), mutant.MutatedSource, cancellation);
-                    result = await EvaluateAsync(workspace.Map(testProject), cancellation);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
-                {
-                    result = new RunResult(Outcome.RunnerError, ex.Message);
-                }
-
-                result = result with
-                {
-                    Outcome = result.Outcome switch
-                    {
-                        Outcome.TestFailed => Outcome.Killed,
-                        Outcome.Passed => Outcome.Survived,
-                        _ => result.Outcome
-                    }
-                };
-                results.Add(new MutantResult(mutant.Id, mutant.Path, mutant.Line,
-                    mutant.Original, mutant.Replacement, result.Outcome, result.Details));
-                LogResult($"{mutant.Id} {mutant.Path}:{mutant.Line} {mutant.Original} → {mutant.Replacement}", result);
-            }
+            originals.Add(originalPath);
+            files.Add(new SourceFile(displayPath, content));
         }
 
-        log($"Mutants: {results.Count}. Killed: {results.Count(result => result.Outcome == Outcome.Killed)}. " +
-            $"Survived: {results.Count(result => result.Outcome == Outcome.Survived)}.");
-        return new RunReport(baseline, results);
+        return new SourceList(result, files);
     }
 
-    private void LogResult(string label, RunResult result)
+    public async Task<RunResult> EvaluateMutantAsync(int index, string mutatedSource, CancellationToken cancellation)
     {
-        log($"{label}: {result.Outcome}");
-        if (result.Details is not null)
-            log(result.Details);
+        cancellation.ThrowIfCancellationRequested();
+        try
+        {
+            using var workspace = new Workspace(root, cancellation);
+            await File.WriteAllTextAsync(workspace.Map(originals[index]), mutatedSource, cancellation);
+            return await EvaluateAsync(workspace.Map(testProject), cancellation);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            return new RunResult(Outcome.RunnerError, ex.Message);
+        }
     }
+
+    public void Dispose() => baselineWorkspace.Dispose();
 
     private async Task<(RunResult Result, string[] Paths)> DiscoverSourcesAsync(
         string project, string workspace, CancellationToken cancellation)

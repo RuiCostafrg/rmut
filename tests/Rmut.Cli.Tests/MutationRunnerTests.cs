@@ -6,6 +6,7 @@ namespace Rmut.Cli.Tests;
 public sealed class MutationRunnerTests
 {
     private const string Source = """
+        // A supplementary character 😀 and operators + && outside any expression.
         public static class Calculator
         {
             public static int Tested() => 3 + 2;
@@ -18,7 +19,11 @@ public sealed class MutationRunnerTests
     public async Task RunReportsKillsSurvivorsAndBuildFailuresWithoutChangingInputs()
     {
         using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());");
-        var report = await fixture.RunAsync();
+        var reference = await fixture.RunAsync();
+        var report = await fixture.RunNativeAsync();
+
+        Assert.Equal(reference.Baseline.Outcome, report.Baseline.Outcome);
+        Assert.Equal(reference.Mutants.Select(Identity), report.Mutants.Select(Identity));
 
         Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
         Assert.Collection(report.Mutants,
@@ -29,13 +34,33 @@ public sealed class MutationRunnerTests
         fixture.AssertInputsUnchanged();
     }
 
+    private static object Identity(MutantResult mutant) =>
+        new { mutant.Id, mutant.Path, mutant.Line, mutant.Original, mutant.Replacement, mutant.Outcome };
+
     [Fact]
     public async Task FailingBaselineStopsBeforeRunningMutants()
     {
         using var fixture = new Fixture("Assert.Equal(99, Calculator.Tested());");
-        var report = await fixture.RunAsync();
+        var report = await fixture.RunNativeAsync();
 
         Assert.Equal(Outcome.TestFailed, report.Baseline.Outcome);
+        Assert.Empty(report.Mutants);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task UnsupportedConditionalCompilationDoesNotProduceFalseSurvivors()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", Source + """
+
+            #if false
+            public class Disabled { public int Add() => 3 + 2; }
+            #endif
+            """);
+        var report = await fixture.RunNativeAsync();
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Equal(Outcome.RunnerError, report.Error?.Outcome);
         Assert.Empty(report.Mutants);
         fixture.AssertInputsUnchanged();
     }
@@ -44,7 +69,7 @@ public sealed class MutationRunnerTests
     public async Task TestHostExitIsARunnerError()
     {
         using var fixture = new Fixture("System.Environment.Exit(42);");
-        var report = await fixture.RunAsync();
+        var report = await fixture.RunNativeAsync();
 
         Assert.Equal(Outcome.RunnerError, report.Baseline.Outcome);
         Assert.Empty(report.Mutants);
@@ -55,7 +80,7 @@ public sealed class MutationRunnerTests
     public async Task DeadlineExpiryIsATimeout()
     {
         using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());");
-        var report = await fixture.RunAsync(timeout: TimeSpan.FromMilliseconds(1));
+        var report = await fixture.RunNativeAsync(timeout: TimeSpan.FromMilliseconds(1));
 
         Assert.Equal(Outcome.TimedOut, report.Baseline.Outcome);
         Assert.Empty(report.Mutants);
@@ -72,7 +97,7 @@ public sealed class MutationRunnerTests
             System.IO.File.WriteAllText({{System.Text.Json.JsonSerializer.Serialize(marker)}}, "");
             System.Threading.Thread.Sleep(System.TimeSpan.FromMinutes(10));
             """);
-        var run = fixture.RunAsync(cancellation.Token);
+        var run = fixture.RunNativeAsync(cancellation.Token);
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
@@ -102,7 +127,7 @@ public sealed class MutationRunnerTests
         private readonly RunOptions options;
         private readonly Dictionary<string, string> inputs;
 
-        public Fixture(string assertion)
+        public Fixture(string assertion, string source = Source)
         {
             inputs = new()
             {
@@ -115,7 +140,7 @@ public sealed class MutationRunnerTests
                     </Project>
                     """,
                 ["prod/Calculator.csproj"] = """<Project Sdk="Microsoft.NET.Sdk" />""",
-                ["prod/Calculator.cs"] = Source,
+                ["prod/Calculator.cs"] = source,
                 ["test/Calculator.Tests.csproj"] = """
                     <Project Sdk="Microsoft.NET.Sdk">
                       <PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup>
@@ -152,7 +177,10 @@ public sealed class MutationRunnerTests
         }
 
         public Task<RunReport> RunAsync(CancellationToken cancellation = default, TimeSpan? timeout = null) =>
-            new MutationRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
+            new ManagedReferenceRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
+
+        public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null) =>
+            NativeRunner.RunAsync(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }, cancellation);
 
         public void AssertInputsUnchanged()
         {
