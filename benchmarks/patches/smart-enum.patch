@@ -1,0 +1,25 @@
+diff --git a/Directory.Build.props b/Directory.Build.props
+index f8955c3..09e603a 100644
+--- a/Directory.Build.props
++++ b/Directory.Build.props
+@@ -9,7 +9,7 @@
+ 		<PackageProjectUrl>https://github.com/ardalis/SmartEnum</PackageProjectUrl>
+ 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+ 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+-		<TargetFrameworks>net10.0;net11.0;netstandard2.0</TargetFrameworks>
++		<TargetFramework>net10.0</TargetFramework>
+ 		<!-- <TreatWarningsAsErrors>true</TreatWarningsAsErrors> -->
+ 		<AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+ 		<Version>9.0.0</Version>
+diff --git a/test/Directory.Build.props b/test/Directory.Build.props
+index fe4a51c..d8f1657 100644
+--- a/test/Directory.Build.props
++++ b/test/Directory.Build.props
+@@ -1,5 +1,5 @@
+ <Project>
+ 	<PropertyGroup>
+-		<TargetFrameworks>net10.0;net11.0</TargetFrameworks>
++		<TargetFramework>net10.0</TargetFramework>
+ 	</PropertyGroup>
+ </Project>
+\ No newline at end of file
