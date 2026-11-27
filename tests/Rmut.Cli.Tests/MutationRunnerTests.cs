@@ -87,6 +87,39 @@ public sealed class MutationRunnerTests
     }
 
     [Fact]
+    public async Task FailedSwitchedControlDiscardsSpeculativeResult()
+    {
+        using var fixture = new Fixture("""
+            const string selectorPrefix = "RMUT_MUTANT_";
+            var selectorBytes = System.Text.Encoding.Unicode.GetBytes(selectorPrefix);
+            var assembly = System.IO.File.ReadAllBytes(typeof(Calculator).Assembly.Location);
+            if (System.MemoryExtensions.IndexOf<byte>((System.ReadOnlySpan<byte>)assembly, selectorBytes) >= 0)
+            {
+                var names = System.Environment.GetEnvironmentVariables().Keys;
+                Assert.Contains(System.Linq.Enumerable.Cast<string>(names),
+                    name => name.StartsWith(selectorPrefix, System.StringComparison.Ordinal));
+                return;
+            }
+
+            Assert.Equal(5, Calculator.Tested());
+            """, """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """);
+        var log = new List<string>();
+        var report = await fixture.RunNativeAsync(switched: true, log: log.Add,
+            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true, switchedWorkers: 2);
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Equal(Outcome.Killed, Assert.Single(report.Mutants).Outcome);
+        Assert.Contains("Switched build unavailable. Using fresh execution.", log);
+        Assert.DoesNotContain(log, line => line.StartsWith("Switched execution ", StringComparison.Ordinal));
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
     public async Task FailedIncrementalBuildRetriesInACleanWorkspace()
     {
         using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
