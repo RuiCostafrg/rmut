@@ -41,18 +41,27 @@ dotnet msbuild Calculator.Tests/Calculator.Tests.csproj -nologo -getItem:Package
   jq -r '.Items.PackageReference[] | "\(.Identity) \(.Version)"' |
   tee "$artifacts/package-versions.txt"
 
+status=0
 for mode in off on; do
   collector=()
   if [[ "$mode" == on ]]; then
     collector=(--collect 'XPlat Code Coverage')
   fi
-  "$work/tools/rmut" run --project Calculator/Calculator.csproj \
+  if ! "$work/tools/rmut" run --project Calculator/Calculator.csproj \
     --test-project Calculator.Tests/Calculator.Tests.csproj --execution switched \
     --switched-test-assembly "bin/Debug/$target/Calculator.Tests.dll" \
     --baseline-results "$artifacts/$mode" --json "$artifacts/$mode.json" \
-    "${collector[@]}" | tee "$artifacts/$mode.log"
-  test "$(rg -c '^Switched execution ' "$artifacts/$mode.log")" -eq 2
+    "${collector[@]}" 2>&1 | tee "$artifacts/$mode.log"; then
+    status=1
+  fi
+  if [[ "$(rg -c '^Switched execution ' "$artifacts/$mode.log")" != 2 ]]; then
+    echo "Expected both mutants to use switched execution with Coverlet $mode." >&2
+    status=1
+  fi
 done
+if ((status)); then
+  exit "$status"
+fi
 
 python3 "$repo/scripts/verify-framework-matrix.py" "$artifacts" "$framework" "$target" "$sdk" \
   | tee "$artifacts/verified.txt"

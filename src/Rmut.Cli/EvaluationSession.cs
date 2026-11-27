@@ -324,20 +324,11 @@ internal sealed class EvaluationSession : IDisposable
             if (exportResults is not null)
             {
                 var reports = Directory.GetFiles(results, "*.trx");
-                var coverage = collectCoverlet
-                    ? Directory.GetFiles(results, "coverage.cobertura.xml", SearchOption.AllDirectories)
-                    : [];
+                var coverage = Directory.GetFiles(results, "coverage.cobertura.xml", SearchOption.AllDirectories);
                 if (collectCoverlet && coverage.Length == 0)
                     return new RunResult(Outcome.RunnerError, $"Coverlet did not produce a Cobertura report. {test.Diagnostics}");
 
-                Directory.CreateDirectory(exportResults);
-                foreach (var source in reports.Concat(coverage))
-                {
-                    cancellation.ThrowIfCancellationRequested();
-                    var destination = Path.Combine(exportResults, Path.GetRelativePath(results, source));
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                    File.Copy(source, destination);
-                }
+                ExportBaselineResults(results, exportResults, reports.Concat(coverage), cancellation);
             }
 
             return (test.ExitCode, total, failed) switch
@@ -350,6 +341,32 @@ internal sealed class EvaluationSession : IDisposable
         catch (Exception ex) when (ex is XmlException or InvalidOperationException or FormatException or ArgumentNullException)
         {
             return new RunResult(Outcome.RunnerError, $"Invalid test results: {ex.Message}");
+        }
+    }
+
+    private static void ExportBaselineResults(string results, string destination, IEnumerable<string> files,
+        CancellationToken cancellation)
+    {
+        var parent = Path.GetDirectoryName(destination)!;
+        var staging = Path.Combine(parent, $".rmut-results-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staging);
+        try
+        {
+            foreach (var source in files)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                var target = Path.Combine(staging, Path.GetRelativePath(results, source));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(source, target);
+            }
+
+            cancellation.ThrowIfCancellationRequested();
+            Directory.Move(staging, destination);
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, recursive: true);
         }
     }
 
