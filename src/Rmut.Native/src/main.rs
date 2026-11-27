@@ -29,10 +29,13 @@ struct Source {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Sources {
     result: RunResult,
     paths: Vec<Source>,
     selector: Option<String>,
+    #[serde(default)]
+    stryker_discovery: bool,
 }
 
 #[derive(Serialize)]
@@ -41,7 +44,8 @@ struct MutantResult {
     path: String,
     line: usize,
     original: String,
-    replacement: &'static str,
+    replacement: String,
+    offset: usize,
     #[serde(flatten)]
     result: RunResult,
 }
@@ -142,7 +146,12 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
     parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into())?;
     let mut candidates = Vec::new();
     for source in &sources.paths {
-        match discovery::discover(&mut parser, &source.path, &source.content) {
+        match discovery::discover(
+            &mut parser,
+            &source.path,
+            &source.content,
+            sources.stryker_discovery,
+        ) {
             Ok(discovery) => candidates.push(discovery),
             Err(error) => {
                 let result = RunResult {
@@ -208,7 +217,8 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
                 path: source.path.clone(),
                 line: mutant.line,
                 original: mutant.original.to_owned(),
-                replacement: mutant.replacement,
+                replacement: mutant.replacement.into_owned(),
+                offset: mutant.offset,
                 result,
             });
         }

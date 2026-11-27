@@ -44,6 +44,7 @@
     "project": "src/SmartEnum/SmartEnum.csproj",
     "test_project": "test/SmartEnum.UnitTests/SmartEnum.UnitTests.csproj",
     "source_patch": "patches/smart-enum.patch",
+    "rmut_args": ["--discovery", "stryker"],
     "stryker_config": {
       "target-framework": "net10.0",
       "verbosity": "debug"

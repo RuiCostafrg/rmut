@@ -99,3 +99,48 @@ tool logs, package fingerprints and normalized differences.
 Both workloads remain compare-only. Green capture jobs indicate that the
 workflow saved evidence. Neither workload established parity, so no elapsed
 time, CPU or memory comparison was collected.
+
+### SmartEnum discovery
+
+The `conformance-smart-enum` artifact from the original hosted run above
+records 333 Stryker-only edit identities. Joining those identities to the raw
+Stryker report gives these counts. The candidate discovery inventory comes from
+the Rust engine on the same pinned source, with edits compared using
+`benchmarks/reports.py`.
+
+| Stryker operator | Originally missing | Still missing |
+| --- | ---: | ---: |
+| Block removal | 100 | 0 |
+| Statement removal | 49 | 0 |
+| Equality | 48 | 0 |
+| Negate expression | 32 | 0 |
+| Boolean literal | 32 | 0 |
+| Remove logical not | 18 | 0 |
+| String | 18 | 0 |
+| Bitwise | 8 | 0 |
+| Conditional true | 5 | 5 |
+| Conditional false | 5 | 5 |
+| Unary minus to plus | 3 | 0 |
+| LINQ Count to Sum | 3 | 3 |
+| LINQ OrderBy to OrderByDescending | 2 | 2 |
+| LINQ FirstOrDefault to First | 2 | 2 |
+| LINQ Last to First | 2 | 2 |
+| LINQ Append to Prepend | 2 | 2 |
+| Collection initializer | 1 | 1 |
+| Post-decrement to increment | 1 | 0 |
+| LINQ First to FirstOrDefault | 1 | 1 |
+| LINQ Any to All | 1 | 1 |
+| **Total** | **333** | **24** |
+
+With `--discovery stryker`, all 372 Rmut edit identities match a Stryker
+identity. This includes the relational alternatives from PR #17. Conditional
+forcing, member-name substitutions from the LINQ mutator and collection
+initializer removal remain outside this profile.
+
+The historical Stryker report marked 93 of the 100 block edits ignored because
+another eligible edit covered the same block. Rmut evaluates the whole
+discovered inventory by rebuilding each fresh mutant. Stryker's filter depends
+on the result of instrumented compilation and other exclusions, so it cannot be
+reproduced by a syntax-only nested-edit check. The crash classification and
+compile rollback differences described above also remain separate from discovery.
+SmartEnum stays comparison-only.

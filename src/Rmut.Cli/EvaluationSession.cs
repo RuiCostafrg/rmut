@@ -6,7 +6,7 @@ using System.Xml.Linq;
 namespace Rmut.Cli;
 
 internal sealed record SourceFile(string Path, string Content);
-internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector);
+internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector, bool StrykerDiscovery);
 internal sealed record InstrumentedFile(int Index, string Content);
 
 internal sealed class EvaluationSession : IDisposable
@@ -19,6 +19,7 @@ internal sealed class EvaluationSession : IDisposable
     private readonly TimeSpan timeout;
     private readonly List<string> originals = [];
     private readonly string? selector;
+    private readonly bool strykerDiscovery;
     private Workspace? switchedWorkspace;
 
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
@@ -35,6 +36,7 @@ internal sealed class EvaluationSession : IDisposable
         }
         baselineWorkspace = new Workspace(root, cancellation);
         this.timeout = timeout;
+        strykerDiscovery = options.StrykerDiscovery;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
     }
 
@@ -61,7 +63,7 @@ internal sealed class EvaluationSession : IDisposable
             files.Add(new SourceFile(displayPath, content));
         }
 
-        return new SourceList(result, files, selector);
+        return new SourceList(result, files, selector, strykerDiscovery);
     }
 
     public async Task<RunResult> EvaluateMutantAsync(int index, string mutatedSource, CancellationToken cancellation)

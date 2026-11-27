@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace Rmut.Cli;
 
 internal sealed record RunOptions(string Project, string TestProject, string? Json, bool Switched = false,
-    string? SwitchedTestAssembly = null)
+    string? SwitchedTestAssembly = null, bool StrykerDiscovery = false)
 {
     public static bool TryParse(string[] args, [NotNullWhen(true)] out RunOptions? options)
     {
@@ -14,7 +14,7 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
         var paths = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Length; i += 2)
         {
-            if (args[i] is not ("--project" or "--test-project" or "--json" or "--execution" or "--switched-test-assembly") ||
+            if (args[i] is not ("--project" or "--test-project" or "--json" or "--execution" or "--switched-test-assembly" or "--discovery") ||
                 string.IsNullOrWhiteSpace(args[i + 1]) || args[i + 1].StartsWith("--") ||
                 !paths.TryAdd(args[i], args[i + 1]))
                 return false;
@@ -33,7 +33,12 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
             !Path.GetExtension(assembly).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
             return false;
 
-        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched", assembly);
+        var discovery = paths.GetValueOrDefault("--discovery", "binary");
+        if (discovery is not ("binary" or "stryker"))
+            return false;
+
+        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched", assembly,
+            discovery == "stryker");
         return true;
     }
 }

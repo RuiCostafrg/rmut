@@ -21,6 +21,7 @@ jobs:
         workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, operator-exclusion-gap]
     env:
       WORKLOAD: ${{ matrix.workload }}
+      TOOL_TIMEOUT: ${{ matrix.workload == 'smart-enum' && 7200 || 1200 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -87,13 +88,14 @@ jobs:
 
   real-projects:
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: ${{ matrix.workload == 'smart-enum' && 250 || 55 }}
     strategy:
       fail-fast: false
       matrix:
         workload: [smart-enum, fluent-validation]
     env:
       WORKLOAD: ${{ matrix.workload }}
+      TOOL_TIMEOUT: ${{ matrix.workload == 'smart-enum' && 7200 || 1200 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -129,7 +131,7 @@ jobs:
           python3 -B benchmarks/run.py compare "$WORKLOAD" \
             --checkout "$RUNNER_TEMP/upstream" \
             --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
-            --output "$results" --timeout 1200 || status=$?
+            --output "$results" --timeout "$TOOL_TIMEOUT" || status=$?
           test "$status" -le 1
           python3 - "$results/pair-01/pair.json" <<'PYCODE'
           import json
