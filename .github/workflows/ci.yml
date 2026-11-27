@@ -60,16 +60,57 @@ jobs:
             -p:PackageVersion="$PACKAGE_VERSION" --output "$RUNNER_TEMP/rmut-feed"
           bash scripts/smoke-package.sh "$RUNNER_TEMP/rmut-feed" "$PACKAGE_VERSION"
       - name: Save the verified package
-        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rmut-package
           path: ${{ runner.temp }}/rmut-feed/Rmut.${{ steps.version.outputs.value }}.nupkg
           if-no-files-found: error
 
+  framework-matrix:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [MSTEST, XUNIT, NUNIT]
+        sdk: ['10.0', '11.0']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        id: dotnet10
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        if: matrix.sdk == '11.0'
+        id: dotnet11
+        with:
+          dotnet-version: 11.0.x
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: rmut-package
+          path: ${{ runner.temp }}/rmut-feed
+      - name: Run installed Rmut with Coverlet off and on
+        env:
+          PACKAGE_VERSION: ${{ needs.verify.outputs.package-version }}
+          FRAMEWORK: ${{ matrix.framework }}
+          SDK_VERSION: ${{ steps.dotnet11.outputs.dotnet-version || steps.dotnet10.outputs.dotnet-version }}
+        run: |
+          bash scripts/test-framework-matrix.sh "$RUNNER_TEMP/rmut-feed" "$PACKAGE_VERSION" \
+            "$FRAMEWORK" "$SDK_VERSION" "$RUNNER_TEMP/framework-results"
+      - name: Save framework results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: framework-${{ matrix.framework }}-${{ matrix.sdk }}
+          path: ${{ runner.temp }}/framework-results
+          if-no-files-found: error
+
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: verify
+    needs: [verify, framework-matrix]
     runs-on: ubuntu-24.04
     environment: nuget
     permissions:

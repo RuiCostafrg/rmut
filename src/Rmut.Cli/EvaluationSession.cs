@@ -21,6 +21,8 @@ internal sealed class EvaluationSession : IDisposable
     private readonly List<string> originals = [];
     private readonly string? selector;
     private readonly string? coveragePath;
+    private readonly string? baselineResults;
+    private readonly bool coverlet;
     private readonly List<Guid> baselineTests = [];
     private Workspace? switchedWorkspace;
 
@@ -36,14 +38,28 @@ internal sealed class EvaluationSession : IDisposable
             if (Path.IsPathRooted(relativeAssembly) || !Workspace.Contains(testDirectory, switchedTestAssembly))
                 throw new IOException("The switched test assembly must be relative to and inside the test project directory.");
         }
+        coverlet = options.Coverlet;
+        if (options.BaselineResults is { } results)
+        {
+            baselineResults = Path.GetFullPath(results);
+            if (Path.Exists(baselineResults))
+                throw new IOException($"Baseline results directory already exists: {baselineResults}");
+        }
         baselineWorkspace = new Workspace(root, cancellation);
         this.timeout = timeout;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
         coveragePath = options.Coverage ? Path.Combine(baselineWorkspace.Root, $".rmut-coverage-{Guid.NewGuid():N}") : null;
     }
 
-    public Task<RunResult> BaselineAsync(CancellationToken cancellation) =>
-        EvaluateAsync(baselineWorkspace.Map(testProject), cancellation, coveragePath is null ? null : baselineTests);
+    public async Task<RunResult> BaselineAsync(CancellationToken cancellation)
+    {
+        var privateProject = baselineWorkspace.Map(testProject);
+        var build = await BuildAsync(privateProject, cancellation);
+        return build.Outcome == Outcome.Passed
+            ? await TestAsync(privateProject, cancellation, passingTests: coveragePath is null ? null : baselineTests,
+                exportResults: baselineResults, collectCoverlet: coverlet)
+            : build;
+    }
 
     public async Task<SourceList> DiscoverAsync(CancellationToken cancellation)
     {
@@ -225,11 +241,10 @@ internal sealed class EvaluationSession : IDisposable
         }
     }
 
-    private async Task<RunResult> EvaluateAsync(string testProject, CancellationToken cancellation,
-        List<Guid>? passingTests = null)
+    private async Task<RunResult> EvaluateAsync(string testProject, CancellationToken cancellation)
     {
         var build = await BuildAsync(testProject, cancellation);
-        return build.Outcome == Outcome.Passed ? await TestAsync(testProject, cancellation, passingTests: passingTests) : build;
+        return build.Outcome == Outcome.Passed ? await TestAsync(testProject, cancellation) : build;
     }
 
     private async Task<RunResult> BuildAsync(string testProject, CancellationToken cancellation,
@@ -256,7 +271,8 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<RunResult> TestAsync(string testProject, CancellationToken cancellation,
-        KeyValuePair<string, string>? selection = null, string? assembly = null, List<Guid>? passingTests = null)
+        KeyValuePair<string, string>? selection = null, string? assembly = null, List<Guid>? passingTests = null,
+        string? exportResults = null, bool collectCoverlet = false)
     {
         var directory = Path.GetDirectoryName(testProject)!;
         var results = Path.Combine(directory, "TestResults", Guid.NewGuid().ToString("N"));
@@ -266,6 +282,8 @@ internal sealed class EvaluationSession : IDisposable
             : ["test", assembly, "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
         if (selection is { } selector)
             arguments = [.. arguments, "--environment", $"{selector.Key}={selector.Value}"];
+        if (collectCoverlet)
+            arguments = [.. arguments, "--collect", "XPlat Code Coverage"];
         var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, arguments);
         if (test.TimedOut)
             return new RunResult(Outcome.TimedOut, "Tests timed out.");
@@ -302,6 +320,25 @@ internal sealed class EvaluationSession : IDisposable
 
             if (testIds is not null && complete && testIds.Count == total && test.ExitCode == 0 && failed == 0)
                 passingTests!.AddRange(testIds);
+
+            if (exportResults is not null)
+            {
+                var reports = Directory.GetFiles(results, "*.trx");
+                var coverage = collectCoverlet
+                    ? Directory.GetFiles(results, "coverage.cobertura.xml", SearchOption.AllDirectories)
+                    : [];
+                if (collectCoverlet && coverage.Length == 0)
+                    return new RunResult(Outcome.RunnerError, $"Coverlet did not produce a Cobertura report. {test.Diagnostics}");
+
+                Directory.CreateDirectory(exportResults);
+                foreach (var source in reports.Concat(coverage))
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    var destination = Path.Combine(exportResults, Path.GetRelativePath(results, source));
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    File.Copy(source, destination);
+                }
+            }
 
             return (test.ExitCode, total, failed) switch
             {
