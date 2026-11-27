@@ -26,7 +26,7 @@ internal static class NativeRunner
     private abstract record Request;
     private sealed record Baseline : Request;
     private sealed record Sources : Request;
-    private sealed record Prepare(InstrumentedFile[] Files) : Request;
+    private sealed record Prepare(InstrumentedFile[] Files, string? FirstMutant) : Request;
     private sealed record EvaluateSwitched(string[] Ids) : Request;
     private sealed record Evaluate(int Index, string MutatedSource) : Request;
     private sealed record Log(string Text) : Request;
@@ -92,18 +92,30 @@ internal static class NativeRunner
                         await ReplyAsync(sources);
                         break;
                     case Prepare preparation when preparation.Files is { Length: > 0 } &&
+                        (preparation.FirstMutant is null ||
+                            (session.SwitchedWorkers == 2 && preparation.FirstMutant.Length == 64)) &&
                         preparation.Files.All(file => file is not null && (uint)file.Index < (uint)sourceCount &&
                             file.Content is not null):
-                        var ready = await session.PrepareSwitchedAsync(preparation.Files, cancellation);
-                        log(ready switch
+                        var prepared = await session.PrepareSwitchedAsync(
+                            preparation.Files, preparation.FirstMutant, cancellation);
+                        log(prepared.Build switch
                         {
                             SwitchedBuild.Incremental or SwitchedBuild.IncrementalWithDirectConsole => "Incremental switched build ready.",
                             SwitchedBuild.Clean => "Switched build ready.",
                             _ => "Switched build unavailable. Using fresh execution."
                         });
-                        if (ready == SwitchedBuild.IncrementalWithDirectConsole)
+                        if (prepared.Build == SwitchedBuild.IncrementalWithDirectConsole)
                             log("Direct VSTest console ready.");
-                        await ReplyAsync(ready != SwitchedBuild.Unavailable);
+                        if (prepared.FirstResult is not null)
+                        {
+                            log("Switched control completed with a speculative mutant.");
+                            log($"Switched execution {preparation.FirstMutant}");
+                        }
+                        await ReplyAsync(new
+                        {
+                            Ready = prepared.Build != SwitchedBuild.Unavailable,
+                            prepared.FirstResult
+                        });
                         break;
                     case EvaluateSwitched evaluation when evaluation.Ids is { Length: > 0 } &&
                         evaluation.Ids.Length <= session.SwitchedWorkers &&

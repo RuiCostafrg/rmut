@@ -56,12 +56,12 @@ public sealed class MutationRunnerTests
             """, """
             public static class Calculator
             {
+                public static readonly int UnsupportedInitializer = 4 + 2;
                 public static readonly int Initialized = Add(3, 2);
                 private static int calls;
                 public static int Add(int left, int right) => left + right;
                 public static bool Untested(int value) => value > 0;
                 public static int Next() => System.Threading.Interlocked.Increment(ref calls);
-                public static readonly int UnsupportedInitializer = 4 + 2;
                 public const int UnsupportedConstant = 3 * 0;
             }
             """);
@@ -73,14 +73,14 @@ public sealed class MutationRunnerTests
         Assert.Equal(Outcome.Passed, switched.Baseline.Outcome);
         Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
         Assert.Collection(switched.Mutants,
-            mutant => Assert.Equal(Outcome.Killed, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
+            mutant => Assert.Equal(Outcome.Killed, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
         Assert.Equal(reuseBaselineBuild, log.Contains("Incremental switched build ready."));
-        Assert.Equal(switchedWorkers == 2, log.Contains("Switched batch completed with 2 workers."));
+        Assert.Equal(switchedWorkers == 2, log.Contains("Switched control completed with a speculative mutant."));
         string[] expectedExecutions = expectSwitched
-            ? [$"Switched execution {switched.Mutants[0].Id}", $"Switched execution {switched.Mutants[1].Id}"]
+            ? [$"Switched execution {switched.Mutants[1].Id}", $"Switched execution {switched.Mutants[2].Id}"]
             : [];
         Assert.Equal(expectedExecutions, log.Where(line => line.StartsWith("Switched execution ", StringComparison.Ordinal)));
         fixture.AssertInputsUnchanged();

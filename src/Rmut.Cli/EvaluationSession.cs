@@ -11,6 +11,7 @@ internal sealed record SourceFile(string Path, string Content);
 internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector, int SwitchedWorkers);
 internal sealed record InstrumentedFile(int Index, string Content);
 internal enum SwitchedBuild { Unavailable, Clean, Incremental, IncrementalWithDirectConsole }
+internal sealed record SwitchedPreparation(SwitchedBuild Build, RunResult? FirstResult = null);
 
 internal sealed class EvaluationSession : IDisposable
 {
@@ -110,10 +111,11 @@ internal sealed class EvaluationSession : IDisposable
         }
     }
 
-    public async Task<SwitchedBuild> PrepareSwitchedAsync(IReadOnlyList<InstrumentedFile> files, CancellationToken cancellation)
+    public async Task<SwitchedPreparation> PrepareSwitchedAsync(IReadOnlyList<InstrumentedFile> files,
+        string? firstMutant, CancellationToken cancellation)
     {
         if (selector is null)
-            return SwitchedBuild.Unavailable;
+            return new(SwitchedBuild.Unavailable);
 
         if (baselineBuildSnapshot is { } snapshot)
         {
@@ -122,10 +124,13 @@ internal sealed class EvaluationSession : IDisposable
                 // MSBuild and NuGet intermediates can contain absolute paths.
                 // Restore the pre-test contents at the exact path where they were built.
                 baselineWorkspace.RestoreSnapshot(snapshot);
-                if (await ValidateSwitchedBuildAsync(baselineWorkspace, files, cancellation, skipRestore: true))
+                var (ready, firstResult) = await ValidateSwitchedBuildAsync(
+                    baselineWorkspace, files, firstMutant, cancellation, skipRestore: true);
+                if (ready)
                 {
                     switchedWorkspace = baselineWorkspace;
-                    return vstestConsole is null ? SwitchedBuild.Incremental : SwitchedBuild.IncrementalWithDirectConsole;
+                    return new(vstestConsole is null ? SwitchedBuild.Incremental : SwitchedBuild.IncrementalWithDirectConsole,
+                        firstResult);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
@@ -138,16 +143,18 @@ internal sealed class EvaluationSession : IDisposable
         try
         {
             template = new Workspace(root, cancellation);
-            if (!await ValidateSwitchedBuildAsync(template, files, cancellation, skipRestore: false))
-                return SwitchedBuild.Unavailable;
+            var (ready, firstResult) = await ValidateSwitchedBuildAsync(
+                template, files, firstMutant, cancellation, skipRestore: false);
+            if (!ready)
+                return new(SwitchedBuild.Unavailable);
 
             switchedWorkspace = template;
             template = null;
-            return SwitchedBuild.Clean;
+            return new(SwitchedBuild.Clean, firstResult);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
         {
-            return SwitchedBuild.Unavailable;
+            return new(SwitchedBuild.Unavailable);
         }
         finally
         {
@@ -155,7 +162,8 @@ internal sealed class EvaluationSession : IDisposable
         }
     }
 
-    private async Task<bool> ValidateSwitchedBuildAsync(Workspace template, IReadOnlyList<InstrumentedFile> files,
+    private async Task<(bool Ready, RunResult? First)> ValidateSwitchedBuildAsync(
+        Workspace template, IReadOnlyList<InstrumentedFile> files, string? firstMutant,
         CancellationToken cancellation, bool skipRestore)
     {
         if (switchedTestAssembly is { } assembly && File.Exists(template.Map(assembly)))
@@ -167,32 +175,45 @@ internal sealed class EvaluationSession : IDisposable
         var build = await BuildAsync(template.Map(testProject), cancellation, rejectFrameworkTypeConflicts: true,
             skipRestore: skipRestore);
         if (build.Outcome != Outcome.Passed)
-            return false;
+            return (false, null);
 
         // An incremental target can decide to skip compilation. Check that the
         // production DLL loaded from the test output contains this run's selector.
         if (skipRestore)
         {
             if (productionAssemblyName is null || switchedTestAssembly is null || selector is null)
-                return false;
+                return (false, null);
 
             var productionAssembly = Path.Combine(Path.GetDirectoryName(template.Map(switchedTestAssembly))!,
                 productionAssemblyName);
             if (!File.Exists(productionAssembly) ||
                 (await File.ReadAllBytesAsync(productionAssembly, cancellation)).AsSpan()
                     .IndexOf(Encoding.Unicode.GetBytes(selector)) < 0)
-                return false;
+                return (false, null);
         }
 
-        // Run the unselected control in the same kind of private copy used for mutants.
+        // Only publish the speculative mutant result if the unselected control passes.
         using var control = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
-        var result = await TestSwitchedAsync(template, control, cancellation);
-        return result.Outcome == Outcome.Passed;
+        var controlRun = TestSwitchedAsync(template, control, cancellation);
+        if (firstMutant is null)
+            return ((await controlRun).Outcome == Outcome.Passed, null);
+
+        var firstRun = EvaluateSwitchedInTemplateAsync(template, firstMutant, cancellation);
+        await Task.WhenAll(controlRun, firstRun);
+        return (await controlRun).Outcome == Outcome.Passed
+            ? (true, await firstRun)
+            : (false, null);
     }
 
-    public async Task<RunResult?> EvaluateSwitchedAsync(string id, CancellationToken cancellation)
+    public Task<RunResult?> EvaluateSwitchedAsync(string id, CancellationToken cancellation) =>
+        switchedWorkspace is { } template
+            ? EvaluateSwitchedInTemplateAsync(template, id, cancellation)
+            : Task.FromResult<RunResult?>(null);
+
+    private async Task<RunResult?> EvaluateSwitchedInTemplateAsync(Workspace template, string id,
+        CancellationToken cancellation)
     {
-        if (switchedWorkspace is not { } template || selector is null)
+        if (selector is null)
             return null;
 
         try

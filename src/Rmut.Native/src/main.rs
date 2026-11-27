@@ -37,6 +37,13 @@ struct Sources {
     switched_workers: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Prepared {
+    ready: bool,
+    first_result: Option<RunResult>,
+}
+
 #[derive(Serialize)]
 struct MutantResult {
     id: String,
@@ -67,6 +74,7 @@ enum Request<'a> {
     Sources,
     Prepare {
         files: Vec<InstrumentedSource>,
+        first_mutant: Option<&'a str>,
     },
     EvaluateSwitched {
         ids: Vec<&'a str>,
@@ -158,6 +166,8 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
         }
     }
     let mut switched = false;
+    let mut first_mutant = None;
+    let mut first_result = None;
     if let Some(selector) = sources
         .selector
         .filter(|_| candidates.iter().all(|file| file.can_instrument))
@@ -173,22 +183,43 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
             })
             .collect();
         if !files.is_empty() {
-            switched = host.call(Request::Prepare { files })?;
+            let first = if sources.switched_workers == 2 {
+                candidates
+                    .iter()
+                    .flat_map(|file| &file.mutations)
+                    .find(|mutant| mutant.can_switch())
+                    .map(|mutant| mutant.id.as_str())
+            } else {
+                None
+            };
+            let prepared: Prepared = host.call(Request::Prepare {
+                files,
+                first_mutant: first,
+            })?;
+            switched = prepared.ready;
+            if switched {
+                first_mutant = first.map(str::to_owned);
+                first_result = prepared.first_result;
+            }
         }
     }
-    let mut mutants =
-        sources
-            .paths
-            .iter()
-            .zip(candidates)
-            .enumerate()
-            .flat_map(|(index, (source, file))| {
-                file.mutations
-                    .into_iter()
-                    .map(move |mutant| (index, source, mutant))
-            });
+    let mut mutants = sources
+        .paths
+        .iter()
+        .zip(candidates)
+        .enumerate()
+        .flat_map(|(index, (source, file))| {
+            file.mutations
+                .into_iter()
+                .map(move |mutant| (index, source, mutant))
+        })
+        .peekable();
     while let Some(first) = mutants.next() {
-        let second = if switched && sources.switched_workers == 2 {
+        let is_first = first_mutant.as_deref() == Some(first.2.id.as_str());
+        let next_is_first = mutants
+            .peek()
+            .is_some_and(|(_, _, mutant)| first_mutant.as_deref() == Some(mutant.id.as_str()));
+        let second = if switched && sources.switched_workers == 2 && !is_first && !next_is_first {
             mutants.next()
         } else {
             None
@@ -197,7 +228,7 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
         let ids: Vec<_> = batch
             .iter()
             .flatten()
-            .filter(|(_, _, mutant)| switched && mutant.can_switch())
+            .filter(|(_, _, mutant)| switched && !is_first && mutant.can_switch())
             .map(|(_, _, mutant)| mutant.id.as_str())
             .collect();
         let count = ids.len();
@@ -215,7 +246,10 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
         }
         let mut switched_results = results.into_iter();
         for (index, source, mutant) in batch.into_iter().flatten() {
-            let switched_result = if switched && mutant.can_switch() {
+            let switched_result = if first_mutant.as_deref() == Some(mutant.id.as_str()) {
+                first_mutant = None;
+                first_result.take()
+            } else if switched && mutant.can_switch() {
                 switched_results.next().flatten()
             } else {
                 None

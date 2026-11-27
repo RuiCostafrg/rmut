@@ -161,3 +161,25 @@ with MSBuild at 139.83 MiB and the compiler at 93.47 MiB. The same baseline
 phase dominated the previous trace. Rmut needs to save about 3.75 s on
 this VM to reach the wall gate, while the observed launcher interval
 accounts for about 2.30 s across the six switched invocations.
+
+## Direct-console replication and parallel pilot
+
+All three runs completed five equivalent measured pairs and one excluded
+warmup. Each verified direct-console selection and all five switched
+mutants. Each was pinned to two logical CPUs. The two serial runs used
+Intel Xeon 6975P-C VMs, and the parallel pilot used AMD EPYC 9V45.
+
+| Rmut configuration | Wall ratio (range) | Peak memory ratio (range) | CPU ratio (range) |
+| --- | ---: | ---: | ---: |
+| [Direct launch with SDK host forwarding](https://github.com/RuiCostafrg/rmut/actions/runs/46074808513/artifacts/15235140089) | 0.803× (0.726–0.874), fail | 0.883× (0.874–0.889), fail | 0.771× (0.770–0.792), pass |
+| [Direct launch and workstation GC in the build processes](https://github.com/RuiCostafrg/rmut/actions/runs/46074988025/artifacts/15234778337) | 0.910× (0.778–0.980), fail | 0.887× (0.882–0.891), fail | 0.776× (0.771–0.782), pass |
+| [Two Rmut workers against the serial Stryker reference](https://github.com/RuiCostafrg/rmut/actions/runs/46075358751/artifacts/15234870897) | 0.740× (0.703–0.818), fail | 0.785× (0.784–0.793), pass | 0.779× (0.754–0.806), inconclusive |
+
+The workstation GC trial failed to reduce build memory. The sampled compiler
+at the peak used 95.67 MiB PSS with workstation GC and 94.33 MiB in the
+direct-launch replication. The experiment was reverted. The parallel
+pilot retained workstation GC and used a different CPU model. Its two
+pairs of mutant testhosts overlapped by 1.01 s and 0.93 s, respectively,
+and the trace showed seven distinct testhosts. The pilot confirms overlapping
+execution in private workspaces. The parallel gate workload uses two
+workers on both tools.

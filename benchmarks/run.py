@@ -235,6 +235,10 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
                     result["parallel_batches"] = log.splitlines().count("Switched batch completed with 2 workers.")
                     if result["parallel_batches"] != expected_batches:
                         raise ValueError("Rmut did not complete the expected two-worker batches")
+                if spec.get("require_parallel_control"):
+                    result["parallel_control"] = "Switched control completed with a speculative mutant." in log.splitlines()
+                    if not result["parallel_control"]:
+                        raise ValueError("Rmut did not complete the switched control alongside a mutant")
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):
