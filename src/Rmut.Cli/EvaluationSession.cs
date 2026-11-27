@@ -199,7 +199,7 @@ internal sealed class EvaluationSession : IDisposable
             return ((await controlRun).Outcome == Outcome.Passed, null);
 
         var firstRun = EvaluateSwitchedInTemplateAsync(template, firstMutant, cancellation);
-        await Task.WhenAll(controlRun, firstRun);
+        await Task.WhenAll((Task)controlRun, firstRun);
         return (await controlRun).Outcome == Outcome.Passed
             ? (true, await firstRun)
             : (false, null);
