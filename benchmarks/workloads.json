@@ -1,0 +1,55 @@
+{
+  "shared-operators": {
+    "source": "fixtures/Conformance",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true
+  },
+  "relational-gap": {
+    "source": "fixtures/Consumer",
+    "project": "Calculator/Calculator.csproj",
+    "test_project": "Calculator.Tests/Calculator.Tests.csproj",
+    "shared_operators": true,
+    "comparison_only": "Stryker emits an extra relational replacement"
+  },
+  "no-coverage-gap": {
+    "source": "fixtures/Conformance",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true,
+    "stryker_config": {
+      "coverage-analysis": "perTest"
+    },
+    "comparison_only": "Rmut does not implement per-test coverage"
+  },
+  "smart-enum": {
+    "repository": "https://github.com/ardalis/SmartEnum.git",
+    "revision": "3a33e77dc2693c8064b79bff2414aa1bcda92529",
+    "project": "src/SmartEnum/SmartEnum.csproj",
+    "test_project": "test/SmartEnum.UnitTests/SmartEnum.UnitTests.csproj",
+    "stryker_config": {
+      "target-framework": "net10.0"
+    },
+    "comparison_only": "Rmut does not select a target for multi-target libraries"
+  },
+  "fluent-validation": {
+    "repository": "https://github.com/FluentValidation/FluentValidation.git",
+    "revision": "5903fa65863ec66dabf10646b9c09b33130a03e8",
+    "project": "src/FluentValidation/FluentValidation.csproj",
+    "test_project": "src/FluentValidation.Tests/FluentValidation.Tests.csproj",
+    "stryker_config": {
+      "target-framework": "net10.0"
+    },
+    "comparison_only": "Rmut does not select a target for multi-target tests"
+  },
+  "operator-exclusion-gap": {
+    "source": "fixtures/Conformance",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true,
+    "additional_ignored_mutators": [
+      "logical"
+    ],
+    "comparison_only": "Rmut does not support mutant exclusions"
+  }
+}
