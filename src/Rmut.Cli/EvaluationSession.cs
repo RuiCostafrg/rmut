@@ -50,7 +50,7 @@ internal sealed class EvaluationSession : IDisposable
     public async Task<RunResult> BaselineAsync(CancellationToken cancellation)
     {
         var privateProject = baselineWorkspace.Map(testProject);
-        var build = await BuildAsync(privateProject, cancellation);
+        var build = await BuildAsync(privateProject, cancellation, tuneCompilerGc: reuseBaselineBuild);
         if (build.Outcome != Outcome.Passed)
             return build;
 
@@ -162,7 +162,7 @@ internal sealed class EvaluationSession : IDisposable
             await File.WriteAllTextAsync(template.Map(originals[file.Index]), file.Content, cancellation);
 
         var build = await BuildAsync(template.Map(testProject), cancellation, rejectFrameworkTypeConflicts: true,
-            skipRestore: skipRestore);
+            skipRestore: skipRestore, tuneCompilerGc: skipRestore);
         if (build.Outcome != Outcome.Passed)
             return false;
 
@@ -299,14 +299,22 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<RunResult> BuildAsync(string testProject, CancellationToken cancellation,
-        bool rejectFrameworkTypeConflicts = false, bool skipRestore = false)
+        bool rejectFrameworkTypeConflicts = false, bool skipRestore = false, bool tuneCompilerGc = false)
     {
         string[] arguments = ["build", testProject, "--disable-build-servers", "--nologo"];
         if (skipRestore)
             arguments = [.. arguments, "--no-restore"];
         if (rejectFrameworkTypeConflicts)
             arguments = [.. arguments, "-warnaserror:CS0436"];
-        var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation, arguments);
+        // Roslyn's command-line compiler normally starts with server GC.
+        // Compact SDK builds can use a single workstation heap instead.
+        var environment = tuneCompilerGc &&
+            Environment.GetEnvironmentVariable("DOTNET_gcServer") is null &&
+            Environment.GetEnvironmentVariable("COMPlus_gcServer") is null
+            ? new Dictionary<string, string> { ["DOTNET_gcServer"] = "0" }
+            : null;
+        var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation,
+            environment, arguments);
         if (build.TimedOut)
             return new RunResult(Outcome.TimedOut, "Build timed out.");
         return build.ExitCode == 0 ? new RunResult(Outcome.Passed) : new RunResult(Outcome.BuildFailed, build.Diagnostics);
