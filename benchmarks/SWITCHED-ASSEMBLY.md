@@ -204,3 +204,40 @@ baseline, with the paired testhosts overlapping by 0.91–1.04 s. The
 highest sampled PSS was again in the original build, at 306.08 MiB.
 The measured CPU use of 11.44 CPU-s implies a lower bound of 5.72 s
 on two logical CPUs even if all work were parallelizable.
+
+## Private Roslyn compiler
+
+The private compiler runs across the two SDK builds under a unique pipe
+name, while each test invocation retains its own testhost. Both hosted
+runs used two workers per tool on two pinned CPUs. Five measured pairs and
+one excluded warmup matched every mutant identity and outcome in each run.
+
+| Revision and host | Wall ratio (range) | Peak memory ratio (range) | CPU ratio (range) |
+| --- | ---: | ---: | ---: |
+| [Initial, AMD EPYC 7763](https://github.com/RuiCostafrg/rmut/actions/runs/46102611817/artifacts/15246327824) | 0.555× (0.531–0.561), fail | 0.727× (0.719–0.787), pass | 0.590× (0.583–0.591), pass |
+| [Clean-fallback revision, AMD EPYC 9V45](https://github.com/RuiCostafrg/rmut/actions/runs/46102735349/artifacts/15245498816) | 0.489× (0.463–0.499), pass | 0.728× (0.723–0.803), inconclusive | 0.578× (0.575–0.581), pass |
+
+The clean-fallback revision finished in 6.49 s (6.38–6.54 s) against
+Stryker's 13.16 s (13.00–14.11 s). Four memory pairs were at or below
+0.735×. The last pair was 0.803×, so no run passed all three gates.
+The initial run had an analogous final-pair increase from roughly
+209 MiB to 224 MiB in Rmut. The sources of those individual cgroup peak
+values are unverified.
+
+The Roslyn logs show three successful server compilation requests and
+the trace shows a single server PID, no standalone compiler, and a clean
+exit before the switched tests. The second build's Csc task took 0.163 s
+on the newer AMD VM. The sampled memory peak shifted to the original test
+while the compiler server remained idle. The server accounted for
+124.80 MiB PSS out of 301.45 MiB total sampled PSS in that run.
+The tests and profiler each use separate processes. The untraced memory
+gate uses cgroup accounting.
+
+A [compact-heap trial](https://github.com/RuiCostafrg/rmut/actions/runs/46103175410/artifacts/15246058100)
+on an Intel Xeon Platinum 8573C VM also matched all five pairs. Its median
+ratios were 0.554× wall (0.523–0.560, fail), 0.815× peak memory
+(0.812–0.845, fail), and 0.588× CPU (0.584–0.600, pass). The diagnostic
+peak was 332.49 MiB PSS during the original build. The trial used a
+different CPU model, so it cannot isolate the effect of the GC setting.
+The setting was reverted because this run did not demonstrate a memory
+gate improvement.
