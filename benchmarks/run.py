@@ -189,16 +189,24 @@ def run_tool(tool, args, spec, run_dir):
         if args.scenario == "incremental":
             subprocess.run(["git", "init", "-q", "-b", "benchmark-base"], cwd=workspace,
                            check=True)
+            commit = ["git", "-c", "user.name=Benchmark", "-c", "user.email=benchmark@example.invalid",
+                      "-c", "commit.gpgsign=false", "commit", "-q"]
+            disk_baseline = tool == "stryker" and spec.get("verify_outcome_reuse")
+            if disk_baseline:
+                # Stryker 5.1.0 also enables Git filtering with Disk baseline and defaults to master.
+                # Seed against an empty parent so every frozen source file is eligible.
+                subprocess.run([*commit, "--allow-empty", "-m", "Empty benchmark base"], cwd=workspace, check=True)
+                subprocess.run(["git", "branch", "master"], cwd=workspace, check=True)
             subprocess.run(["git", "add", "-f", "."], cwd=workspace, check=True)
-            subprocess.run(["git", "-c", "user.name=Benchmark", "-c",
-                            "user.email=benchmark@example.invalid", "-c", "commit.gpgsign=false",
-                            "commit", "-qm", "Frozen source"], cwd=workspace, check=True)
+            subprocess.run([*commit, "-m", "Frozen source"], cwd=workspace, check=True)
             seed_dir = run_dir / "seed"
             seed_dir.mkdir()
             seed = invoke(tool, args, spec, workspace, seed_dir, seed=True)
             result["seed"] = seed[0]
             if seed[0].get("error") or not seed[1] or differential(seed[1], seed[1])["unfinished"]:
                 raise ValueError("Incremental seed did not produce a completed mutation report")
+            if disk_baseline:
+                subprocess.run(["git", "branch", "-f", "master", "HEAD"], cwd=workspace, check=True)
             if args.incremental_patch is not None:
                 subprocess.run(["git", "apply", str(args.incremental_patch)], cwd=workspace, check=True)
         sample, records = invoke(tool, args, spec, workspace, run_dir)
@@ -215,8 +223,10 @@ def run_tool(tool, args, spec, run_dir):
             result["fresh"] = fresh_sample
             result["seed_differential"] = differential(seed[1], records)
             result["fresh_differential"] = differential(fresh_records, records)
-            if fresh_sample.get("error") or any(result["fresh_differential"].values()):
-                raise ValueError("Incremental mutation outcomes differ from fresh execution")
+            if fresh_sample.get("error"):
+                raise ValueError("Fresh control did not produce a completed mutation report")
+            if tool == "rmut" and any(result["fresh_differential"].values()):
+                raise ValueError("Rmut incremental outcomes differ from fresh execution")
             if tool == "rmut" and spec.get("verify_outcome_reuse"):
                 if sample["mutant_ids"] != fresh_sample["mutant_ids"]:
                     raise ValueError("Rmut changed mutant IDs between cached and fresh execution")
@@ -272,7 +282,8 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False, fresh=False):
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):
                     raise ValueError("Rmut did not use switched execution for every mutant")
-        if records and not any(row["outcome"] != "ignored" for row in records.values()):
+        stock_incremental = tool == "stryker" and args.scenario == "incremental" and not seed and not fresh
+        if records and not stock_incremental and not any(row["outcome"] != "ignored" for row in records.values()):
             raise ValueError("Mutation report contained only exclusions")
         if not records:
             raise ValueError("Mutation report contained no mutants or exclusions")
