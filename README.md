@@ -42,6 +42,12 @@ collection, unsupported expressions, and production static initialization use
 full-suite execution. Coverage is off by default. This mode collects suite-wide
 hits, with no per-test attribution.
 
+Use `--baseline-results DIRECTORY` to export the VSTest baseline TRX to a new directory.
+Add `--collect "XPlat Code Coverage"` to collect and export Coverlet's Cobertura report
+from that baseline. Add `coverlet.collector` to the consumer test project for collection.
+Rmut runs the collector in its private baseline workspace. The collector is independent
+of Rmut's `--coverage all` mutation coverage probes.
+
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 
 ## Verify a local package
@@ -61,7 +67,7 @@ The installed-package smoke test passed with .NET SDK 10.0.404, xUnit 2.9.3, and
 
 ## Publish a release
 
-The GitHub Actions workflow publishes package `Rmut` to the NuGet.org V3 feed. A tag of the form `vMAJOR.MINOR.PATCH` sets the NuGet version by dropping the leading `v`. For example, `v0.1.0` publishes `Rmut` version `0.1.0`. The publish job uploads the same package that passed the build, tests, and installed-tool smoke check.
+The GitHub Actions workflow publishes package `Rmut` to the NuGet.org V3 feed. A tag of the form `vMAJOR.MINOR.PATCH` sets the NuGet version by dropping the leading `v`. For example, `v0.1.0` publishes `Rmut` version `0.1.0`. The publish job uploads the same package that passed the build, tests, installed-tool smoke check, and six framework and SDK combinations.
 
 Before cutting the first tag, configure a NuGet.org account authorized to publish `Rmut`. In NuGet.org, add a GitHub Actions trusted publishing policy for repository `RuiCostafrg/rmut`, workflow file `ci.yml`, and environment `nuget`. Select the user or organization that will own the package. Scope the policy to `Rmut` and allow publishing a new package for the first release and new versions for subsequent releases. Create the `nuget` environment in GitHub and set its `NUGET_USER` secret to the account's NuGet.org profile name. The workflow exchanges its GitHub OIDC token for a short-lived NuGet API key. [NuGet trusted publishing setup](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing)
 
