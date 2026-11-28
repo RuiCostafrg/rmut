@@ -25,7 +25,7 @@ python3 -B benchmarks/run.py compare shared-operators \
 | `switched-operators` | Five independent arithmetic and equality edits supported by the Rust switched runner. One xUnit test kills four mutants and leaves one survivor. |
 | `switched-assembly` | Same fixture with Rmut opting into direct VSTest DLL execution. |
 | `shared-operators` | Equivalent arithmetic, equality and logical mutants. Two edits share a line. The tests kill four mutants and leave one survivor with coverage analysis off. |
-| `relational-gap` | Stryker has a second replacement for the same comparison expression. |
+| `relational-gap` | Both tools agree on the two replacements for the same comparison expression. |
 | `no-coverage-gap` | Stryker per-test coverage distinguishes an uncovered mutation from a survivor. |
 | `operator-exclusion-gap` | A configured Stryker mutator exclusion changes the outcome for the logical edit. |
 | `smart-enum` | Small real library and its unit tests. The pinned upstream project is multi-targeted. |

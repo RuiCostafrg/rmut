@@ -18,18 +18,23 @@ pub struct Mutation<'a> {
 
 impl Mutation<'_> {
     pub fn apply(&self, source: &str) -> String {
-        let rest = &source[self.end..];
-        let needs_space = match self.replacement.as_ref() {
-            "+" | "-" => rest.starts_with(self.replacement.as_ref()),
-            "/" => rest.starts_with(['/', '*']),
-            _ => false,
-        };
-        let space = if needs_space { " " } else { "" };
-        format!(
-            "{}{replacement}{space}{rest}",
-            &source[..self.start],
-            replacement = self.replacement
-        )
+        let left = &source[..self.start];
+        let right = &source[self.end..];
+        let replacement = self.replacement.as_ref();
+        let before = token_separator(left, replacement);
+        let after = token_separator(replacement, right);
+        format!("{left}{before}{replacement}{after}{right}")
+    }
+}
+
+fn token_separator(left: &str, right: &str) -> &'static str {
+    match (left.as_bytes().last(), right.as_bytes().first()) {
+        (Some(b'+'), Some(b'+'))
+        | (Some(b'-'), Some(b'-'))
+        | (Some(b'/'), Some(b'/' | b'*'))
+        | (Some(b'&'), Some(b'&'))
+        | (Some(b'|'), Some(b'|')) => " ",
+        _ => "",
     }
 }
 
@@ -89,10 +94,13 @@ pub fn instrument(source: &str, mutations: &[Mutation<'_>], selector: &str) -> O
         for mutant in alternatives {
             let left = &source[range.start..mutant.start];
             let right = &source[mutant.end..range.end];
+            let replacement = mutant.replacement.as_ref();
+            let before = token_separator(left, replacement);
+            let after = token_separator(replacement, right);
             write!(
                 instrumented,
-                "(global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\") ? ({left}{}{right}) : ",
-                mutant.id, mutant.replacement
+                "(global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\") ? ({left}{before}{replacement}{after}{right}) : ",
+                mutant.id
             )
             .expect("writing to a String cannot fail");
         }
@@ -576,5 +584,28 @@ mod tests {
             .apply(source)
             .contains("if (!(input is null || enabled))"));
         assert!(instrument(source, &expanded.mutations, "MUTANT").is_none());
+    }
+    #[test]
+    fn replacements_preserve_adjacent_binary_and_unary_tokens() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .unwrap();
+        for (source, expected) in [
+            ("class C { int M(int a, int b) => a+-b; }", "a+ +b"),
+            ("class C { int M(int a, int b) => a-+b; }", "a- -b"),
+        ] {
+            let discovery = discover(&mut parser, "C.cs", source, true).unwrap();
+            let edited: Vec<_> = discovery
+                .mutations
+                .iter()
+                .map(|m| m.apply(source))
+                .collect();
+            assert_eq!(edited.len(), 2);
+            assert!(edited[1].contains(expected));
+            assert!(edited
+                .iter()
+                .all(|text| { !parser.parse(text, None).unwrap().root_node().has_error() }));
+        }
     }
 }

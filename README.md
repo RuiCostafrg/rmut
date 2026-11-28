@@ -26,7 +26,9 @@ Use `--discovery stryker` to opt into the broader Rust discovery profile used
 for SmartEnum conformance. It adds block and statement removal, pattern
 negation, condition and boolean negation, string replacement, and additional
 unary, update and bitwise operators. The default `--discovery binary` selects
-the established binary operator inventory. New non-switchable edits run in
+the binary operator inventory, including both Stryker relational alternatives
+for each of `<`, `<=`, `>` and `>=`. Runs on older versions with one
+alternative per comparison can report fewer mutants. New non-switchable edits run in
 fresh mode, including when switched execution is requested. See the
 [SmartEnum comparison](benchmarks/STRYKER-5.1.0.md#smartenum-discovery) for
 the remaining inventory and outcome gaps.

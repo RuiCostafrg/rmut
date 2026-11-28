@@ -21,7 +21,6 @@ jobs:
         workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, operator-exclusion-gap]
     env:
       WORKLOAD: ${{ matrix.workload }}
-      TOOL_TIMEOUT: ${{ matrix.workload == 'smart-enum' && 7200 || 1200 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -63,9 +62,11 @@ jobs:
                   "killed", "killed", "killed", "killed", "survived",
               ], pair["rmut"]["mutants"]
           elif workload == "relational-gap":
-              assert status == "1" and not pair["equivalent"], diff
-              assert len(diff["stryker_only"]) == 1 and diff["stryker_only"][0][2:] == [">", "<"], diff
-              assert not diff["outcome_mismatches"], diff
+              assert status == "0" and pair["equivalent"], diff
+              assert sorted((row["identity"][2], row["identity"][3], row["outcome"])
+                            for row in pair["rmut"]["mutants"]) == [
+                  ("+", "-", "killed"), (">", "<", "survived"), (">", ">=", "survived"),
+              ], pair["rmut"]["mutants"]
           else:
               assert status == "1" and not pair["equivalent"], diff
               assert not diff["stryker_only"] and len(diff["outcome_mismatches"]) == 1, diff

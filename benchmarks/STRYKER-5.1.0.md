@@ -21,7 +21,7 @@ Each row names a 5.1.0 `ignore-mutations` family. A fixture name links the famil
 | Family | Fixture or input | Rmut status |
 | --- | --- | --- |
 | `arithmetic` | `shared-operators`, `relational-gap`; also exercise subtraction, division, remainder and string concatenation | Partial. Fixtures cover addition and multiplication. |
-| `equality` | `shared-operators` (`==`), `relational-gap` (`>`); add other relational operators and relational patterns | Partial. Rmut emits one replacement per comparison. |
+| `equality` | `shared-operators` (`==`), `relational-gap` (`>`); add other relational operators and relational patterns | Partial. Both binary relational replacements match. Relational patterns remain open. |
 | `logical` | `shared-operators`, `operator-exclusion-gap`; add `\|\|`, logical XOR and binary patterns | Partial. |
 | `bitwise` | AND, OR, XOR and signed/unsigned shifts | Gap. |
 | `boolean` | Both Boolean literals | Gap. |
@@ -144,3 +144,22 @@ on the result of instrumented compilation and other exclusions, so it cannot be
 reproduced by a syntax-only nested-edit check. The crash classification and
 compile rollback differences described above also remain separate from discovery.
 SmartEnum stays comparison-only.
+
+The [first expanded hosted run](https://github.com/RuiCostafrg/rmut/actions/runs/46079222401)
+confirmed the inventory and matched 274 of the 372 shared outcomes. Of the 98
+differences, 93 are block edits Stryker ignored. The five other differences
+below use UTF-16 source offsets.
+
+| File and offset | Edit | Stryker | Rmut |
+| --- | --- | --- | --- |
+| `SmartEnum.cs` 3140 | Empty the comparer method body | Killed | Build failed |
+| `SmartEnum.cs` 16521 | Replace `==` with `!=` | Timed out | Runner error |
+| `SmartEnumComparerAttribute.cs` 1997 | Remove the throw statement | Survived | Build failed |
+| `SmartFlagEngine.cs` 7299 | Replace `-` with `+` | Build failed | Survived |
+| `SmartFlagEnum.cs` 14004 | Replace `>` with `<` | Build failed | Survived |
+
+The two statement and block removals that fail Rmut's build remove required
+control flow from the fresh source. The two edits that survive Rmut and fail
+Stryker's build require investigation of Stryker's instrumented compilation
+and rollback. The one unfinished result is Rmut's recursive-operator crash.
+The capture contains both reports and the full differential.
