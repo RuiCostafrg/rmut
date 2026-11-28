@@ -80,3 +80,11 @@ execution killed the newly asserted mutant. Rmut invalidated all outcomes and re
 the new kill.
 [Report writer](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/Reporters/Json/JsonReport.cs#L60-L69)
 [Baseline filter](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/MutantFilters/BaselineMutantFilter.cs#L69-L108)
+
+Use the paired benchmark workflow's `incremental-operators` workload for production-edit
+measurement. Every pair has independent seeds and untimed fresh controls. Both timed runs
+must execute all five mutants, with no cache hits or ignored outcomes, and match both fresh
+reports. The clean benchmark thresholds remain visible as reference values in the incremental
+summary. They govern the clean performance gate. This small production edit measures the cost
+of a full mutant rerun after invalidation. The unchanged and test-only scenarios are correctness
+checks because Stryker skips mutants in those scenarios.

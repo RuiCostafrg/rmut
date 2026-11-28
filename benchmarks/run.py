@@ -233,6 +233,15 @@ def run_tool(tool, args, spec, run_dir):
                 expected = 0 if args.incremental_patch is not None else len(records)
                 if seed[0]["reused_outcomes"] != 0 or sample["reused_outcomes"] != expected:
                     raise ValueError(f"Expected {expected} Rmut cache hits after an independent seed")
+            if args.measure:
+                if any(result["fresh_differential"].values()) or any(
+                    row["outcome"] not in {"killed", "survived"} for row in records.values()
+                ) or sample["reused_outcomes"] != 0:
+                    raise ValueError("Production benchmark requires fresh parity and execution of every mutant")
+                if tool == "stryker" and (sample.get("git_changed_files") != 1 or any(
+                    row["reason"] != "Mutant changed compared to target commit" for row in records.values()
+                )):
+                    raise ValueError("Stryker did not execute every mutant because of the production edit")
             if tool == "stryker" and spec.get("verify_outcome_reuse"):
                 if seed[0]["reused_outcomes"] or not sample["baseline_loaded"]:
                     raise ValueError("Stryker did not load an independently seeded baseline")
@@ -248,7 +257,7 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False, fresh=False):
     records = {}
     try:
         result.update(execute(command, cwd, directory / "tool.log", args.timeout,
-                              args.cgroup if args.measure and not seed else None))
+                              args.cgroup if args.measure and not seed and not fresh else None))
         if tool == "stryker":
             report = (directory if fresh else workspace.parent) / "reports" / "mutation-report.json"
             if not report.is_file():
@@ -393,8 +402,10 @@ def main():
     if spec.get("verify_outcome_reuse") and args.scenario != "incremental":
         parser.error("This workload requires --scenario incremental")
     if args.scenario == "incremental":
-        if args.measure:
-            parser.error("incremental measurement requires verified Rmut cache reuse")
+        production_patch = ROOT / "benchmarks/incremental/production.patch"
+        if args.measure and (args.workload != "incremental-operators" or
+                             args.incremental_patch != production_patch or not spec.get("verify_outcome_reuse")):
+            parser.error("incremental measurement requires the verified production-edit workload")
         if not all(spec.get(key) for key in (
             "stryker_seed_config", "stryker_config", "rmut_seed_args", "rmut_args",
         )):
@@ -483,7 +494,7 @@ def main():
     write_json(args.output / "summary.json", summary)
     print(json.dumps(summary, indent=2))
     passed = equivalent and (
-        not args.measure or all(row["verdict"] == "pass" for row in summary["performance"].values())
+        not args.measure or args.scenario == "incremental" or all(row["verdict"] == "pass" for row in summary["performance"].values())
     )
     return 0 if passed else 1
 
