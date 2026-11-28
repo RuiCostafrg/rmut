@@ -2,8 +2,10 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Rmut.Cli;
 
+internal sealed record OutcomeCacheOptions(string CachePath, string InputsPath);
+
 internal sealed record RunOptions(string Project, string TestProject, string? Json, bool Switched = false,
-    string? SwitchedTestAssembly = null)
+    string? SwitchedTestAssembly = null, OutcomeCacheOptions? OutcomeCache = null)
 {
     public static bool TryParse(string[] args, [NotNullWhen(true)] out RunOptions? options)
     {
@@ -14,7 +16,7 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
         var paths = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Length; i += 2)
         {
-            if (args[i] is not ("--project" or "--test-project" or "--json" or "--execution" or "--switched-test-assembly") ||
+            if (args[i] is not ("--project" or "--test-project" or "--json" or "--execution" or "--switched-test-assembly" or "--outcome-cache" or "--cache-inputs") ||
                 string.IsNullOrWhiteSpace(args[i + 1]) || args[i + 1].StartsWith("--") ||
                 !paths.TryAdd(args[i], args[i + 1]))
                 return false;
@@ -33,7 +35,13 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
             !Path.GetExtension(assembly).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
             return false;
 
-        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched", assembly);
+        var cache = paths.GetValueOrDefault("--outcome-cache");
+        var inputs = paths.GetValueOrDefault("--cache-inputs");
+        if ((cache is null) != (inputs is null) || (cache is not null && execution != "fresh"))
+            return false;
+
+        options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"), execution == "switched", assembly,
+            cache is null ? null : new OutcomeCacheOptions(cache, inputs!));
         return true;
     }
 }

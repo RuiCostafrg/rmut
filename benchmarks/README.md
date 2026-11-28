@@ -59,6 +59,32 @@ The child cgroup measures peak charged memory, including charged file cache and 
 
 `summary.json` reports each metric's median and range, both ratio of medians and median paired ratio, and the gate verdict. The elapsed-time gate is 0.50× of Stryker. The memory and CPU gates are 0.80×. Observations crossing a gate are inconclusive. A run with any correctness mismatch or process failure emits no performance summary. Exit 0 means the requested gate passed, 1 means a comparison or performance gate failed or was inconclusive, and 2 means setup failed.
 
-Incremental comparison uses `--scenario incremental` with a workload manifest that supplies both `stryker_seed_config` / `stryker_config` and `rmut_seed_args` / `rmut_args`. The seed and measured stages reuse the same source and output root per tool. Rmut arguments may reference `{workspace}` and `{run_dir}`. An optional `incremental_patch` relative to the workload manifest is applied after both tools have independently seeded from identical source. The seed Git commit is on branch `benchmark-base`. Incremental timing remains disabled until Rmut exposes verifiable cache reuse.
+Incremental comparison uses `--scenario incremental` with a workload manifest that supplies both `stryker_seed_config` / `stryker_config` and `rmut_seed_args` / `rmut_args`. The seed and measured stages reuse the same source and output root per tool. Rmut arguments may reference `{workspace}` and `{run_dir}`. An optional `incremental_patch` relative to the workload manifest is applied after both tools have independently seeded from identical source. The seed Git commit is on branch `benchmark-base`. The harness compares each tool's incremental outcomes with its own fresh outcomes and checks
+Rmut's cache hits. To exercise the shared fixture, use `compare incremental-operators --scenario
+incremental` with the usual installed tool paths and a separate output directory. Run it with no
+patch for unchanged inputs, then repeat with `--incremental-patch
+benchmarks/incremental/test-only.patch` and `--incremental-patch
+benchmarks/incremental/production.patch`. These runs validate correctness. The clean timing
+workflow uses its existing workloads and output directories.
 
 Keep `environment.json`, `summary.json`, and every `pair.json`, tool log and report for audit. The [baseline log](BASELINE.md) records current evidence.
+
+This fixture uses Stryker.NET 5.1.0's Disk baseline. The harness records baseline loading
+and counts report entries marked `Result based on previous run`. In this version the
+baseline writer keys files by full path and the filter looks up relative paths, so a
+loaded baseline can produce zero reused outcomes. Its Git diff ignores generated
+`bin`, `obj`, and `TestResults` files so build output does not trigger reruns in the
+unchanged case. The comparison records ignored mutants as differences from fresh
+results. In the test-only fixture, Stryker's filter ignored every mutant while fresh
+execution killed the newly asserted mutant. Rmut invalidated all outcomes and reported
+the new kill.
+[Report writer](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/Reporters/Json/JsonReport.cs#L60-L69)
+[Baseline filter](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/MutantFilters/BaselineMutantFilter.cs#L69-L108)
+
+Use the paired benchmark workflow's `incremental-operators` workload for production-edit
+measurement. Every pair has independent seeds and untimed fresh controls. Both timed runs
+must execute all five mutants, with no cache hits or ignored outcomes, and match both fresh
+reports. The clean benchmark thresholds remain visible as reference values in the incremental
+summary. They govern the clean performance gate. This small production edit measures the cost
+of a full mutant rerun after invalidation. The unchanged and test-only scenarios are correctness
+checks because Stryker skips mutants in those scenarios.

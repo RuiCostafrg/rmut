@@ -7,6 +7,8 @@ internal sealed class Workspace : IDisposable
         ".git", ".vs", "bin", "obj", "TestResults"
     };
 
+    public bool SkippedLinks { get; private set; }
+
     public string SourceRoot { get; }
     public string Root { get; }
 
@@ -61,19 +63,22 @@ internal sealed class Workspace : IDisposable
             !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
-    private static void CopyDirectory(string source, string destination, CancellationToken cancellation, bool includeBuildOutputs)
+    private void CopyDirectory(string source, string destination, CancellationToken cancellation, bool includeBuildOutputs)
     {
         foreach (var entry in new DirectoryInfo(source).EnumerateFileSystemInfos())
         {
             cancellation.ThrowIfCancellationRequested();
-            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+            if (entry is DirectoryInfo && !includeBuildOutputs && ExcludedDirectories.Contains(entry.Name))
                 continue;
+            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                SkippedLinks = true;
+                continue;
+            }
 
             var target = Path.Combine(destination, entry.Name);
             if (entry is DirectoryInfo)
             {
-                if (!includeBuildOutputs && ExcludedDirectories.Contains(entry.Name))
-                    continue;
                 Directory.CreateDirectory(target);
                 CopyDirectory(entry.FullName, target, cancellation, includeBuildOutputs);
             }

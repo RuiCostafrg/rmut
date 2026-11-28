@@ -1,0 +1,10 @@
+--- a/Subject.Tests/SubjectTests.cs
++++ b/Subject.Tests/SubjectTests.cs
+@@ -8,6 +8,7 @@
+     public void ExercisesSharedOperators()
+     {
+         Assert.Equal(9, Subject.Combine(2, 3, 4));
++        Assert.Equal(42, Subject.Unasserted(6, 7));
+         Assert.True(Subject.Same(2, 2));
+         Assert.False(Subject.Choose(true, false));
+     }

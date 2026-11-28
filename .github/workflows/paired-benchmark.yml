@@ -4,20 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       workload:
-        description: Switched execution path
+        description: Benchmark workload
         type: choice
-        options: [switched-operators, switched-assembly]
+        options: [switched-operators, switched-assembly, incremental-operators]
         default: switched-operators
       profile:
         description: Collect a separate switched process-tree diagnostic
         type: boolean
         default: false
   push:
-    branches: [perf/m2-paired-baseline]
+    branches: [perf/m2-paired-baseline, perf/incremental-outcome-reuse]
     paths:
       - '.github/workflows/paired-benchmark.yml'
       - 'benchmarks/run.py'
       - 'benchmarks/workloads.json'
+      - 'benchmarks/incremental/**'
       - 'fixtures/SwitchedBenchmark/**'
       - 'src/**'
 
@@ -50,7 +51,7 @@ jobs:
             --add-source "$RUNNER_TEMP/feed"
       - name: Run paired benchmark
         env:
-          WORKLOAD: ${{ inputs.workload || 'switched-operators' }}
+          WORKLOAD: ${{ inputs.workload || (github.ref_name == 'perf/incremental-outcome-reuse' && 'incremental-operators') || 'switched-operators' }}
         run: |
           parent="/sys/fs/cgroup/rmut-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           report="$RUNNER_TEMP/benchmark-evidence"
@@ -69,15 +70,19 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$parent" "$parent/cgroup.procs"
           sudo mkdir "$parent/harness"
           affinity=$(python3 -c 'import os; print(",".join(map(str, sorted(os.sched_getaffinity(0))[:2])))')
+          scenario=()
+          if [[ "$WORKLOAD" == incremental-operators ]]; then
+            scenario=(--scenario incremental --incremental-patch benchmarks/incremental/production.patch)
+          fi
           (
             # Sibling groups share the delegated parent as their migration boundary.
             sudo sh -c 'printf "%s" "$1" > "$2/cgroup.procs"' sh "$BASHPID" "$parent/harness"
-            exec taskset --cpu-list "$affinity" python3 -B benchmarks/run.py measure "$WORKLOAD" \
+            exec taskset --cpu-list "$affinity" python3 -B benchmarks/run.py measure "$WORKLOAD" "${scenario[@]}" \
               --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
               --cgroup "$parent" --pairs 5 --warmups 1 --timeout 300 --output "$report/results"
           )
       - name: Profile switched process tree
-        if: ${{ !cancelled() && inputs.profile }}
+        if: ${{ !cancelled() && inputs.profile && inputs.workload != 'incremental-operators' }}
         env:
           WORKLOAD: ${{ inputs.workload }}
         run: |
@@ -99,5 +104,9 @@ jobs:
             ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/*.log
             ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/*.json
             ${{ runner.temp }}/benchmark-evidence/results/pair-*/stryker/reports/*.json
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/seed/*
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/fresh/*.log
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/*/fresh/*.json
+            ${{ runner.temp }}/benchmark-evidence/results/pair-*/stryker/fresh/reports/*.json
             ${{ runner.temp }}/benchmark-evidence/profile/*.log
             ${{ runner.temp }}/benchmark-evidence/profile/*.json*

@@ -19,8 +19,16 @@ jobs:
       fail-fast: false
       matrix:
         workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, operator-exclusion-gap]
+        include:
+          - workload: incremental-operators
+            scenario: unchanged
+          - workload: incremental-operators
+            scenario: test-only
+          - workload: incremental-operators
+            scenario: production
     env:
       WORKLOAD: ${{ matrix.workload }}
+      SCENARIO: ${{ matrix.scenario }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -37,7 +45,62 @@ jobs:
             --output "$RUNNER_TEMP/feed"
           dotnet tool install Rmut --version 0.0.1-conformance --tool-path "$RUNNER_TEMP/rmut" \
             --add-source "$RUNNER_TEMP/feed"
+      - name: Compare incremental and fresh mutant reports
+        if: matrix.scenario
+        run: |
+          patch=()
+          if [[ "$SCENARIO" != unchanged ]]; then
+            patch=(--incremental-patch "benchmarks/incremental/$SCENARIO.patch")
+          fi
+          status=0
+          python3 -B benchmarks/run.py compare "$WORKLOAD" --scenario incremental "${patch[@]}" \
+            --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
+            --output "$RUNNER_TEMP/result" --timeout 300 || status=$?
+          python3 - "$RUNNER_TEMP/result/pair-01/pair.json" "$SCENARIO" "$status" <<'PY'
+          import json
+          import sys
+
+          path, scenario, status = sys.argv[1:]
+          with open(path) as stream:
+              pair = json.load(stream)
+          stryker, rmut = pair["stryker"], pair["rmut"]
+          for tool in (stryker, rmut):
+              assert tool.get("exit_code") == 0 and "error" not in tool, tool
+              assert not tool["fresh_differential"]["unfinished"], tool["fresh_differential"]
+
+          def outcomes(sample):
+              return {tuple(row["identity"]): row["outcome"] for row in sample["mutants"]}
+
+          assert outcomes(stryker["seed"]) == outcomes(rmut["seed"])
+          assert outcomes(stryker["fresh"]) == outcomes(rmut["fresh"])
+          assert not any(rmut["fresh_differential"].values())
+          assert stryker["baseline_loaded"] and stryker["reused_outcomes"] == 0
+          assert stryker["git_changed_files"] == (0 if scenario == "unchanged" else 1), stryker
+
+          diff = rmut["seed_differential"]
+          if scenario == "test-only":
+              [changed] = diff["outcome_mismatches"]
+              assert (changed["stryker"]["outcome"], changed["rmut"]["outcome"]) == ("survived", "killed"), diff
+              assert not diff["stryker_only"] and not diff["rmut_only"], diff
+          elif scenario == "production":
+              assert len(diff["stryker_only"]) == len(diff["rmut_only"]) == 1, diff
+          else:
+              assert not any(diff.values()), diff
+
+          diff = pair["differential"]
+          assert not diff["stryker_only"] and not diff["rmut_only"] and not diff["unfinished"], diff
+          for row in diff["outcome_mismatches"]:
+              assert row["stryker"]["outcome"] == "ignored" and row["stryker"]["reason"] in {
+                  "Mutant not changed compared to target commit", "Removed by since filter",
+              }, diff
+          if scenario in ("unchanged", "test-only"):
+              assert len(diff["outcome_mismatches"]) == len(rmut["mutants"]), diff
+          if scenario == "production":
+              assert not any(diff.values()), diff
+          assert status == ("1" if diff["outcome_mismatches"] else "0"), diff
+          PY
       - name: Compare mutant reports
+        if: ${{ !matrix.scenario }}
         run: |
           results="$RUNNER_TEMP/result"
           status=0
@@ -76,11 +139,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: conformance-${{ matrix.workload }}
+          name: conformance-${{ matrix.workload }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }}
           path: |
             ${{ runner.temp }}/result/*.json
             ${{ runner.temp }}/result/pair-*/pair.json
             ${{ runner.temp }}/result/pair-*/*/*.log
             ${{ runner.temp }}/result/pair-*/*/*.json
             ${{ runner.temp }}/result/pair-*/stryker/reports/*.json
+            ${{ runner.temp }}/result/pair-*/*/seed/*.json
+            ${{ runner.temp }}/result/pair-*/*/seed/*.log
+            ${{ runner.temp }}/result/pair-*/*/fresh/*.json
+            ${{ runner.temp }}/result/pair-*/*/fresh/*.log
+            ${{ runner.temp }}/result/pair-*/stryker/fresh/reports/*.json
           if-no-files-found: ignore

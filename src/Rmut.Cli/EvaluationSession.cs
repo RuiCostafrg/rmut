@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
@@ -16,6 +17,8 @@ internal sealed class EvaluationSession : IDisposable
     private readonly string root;
     private readonly string? switchedTestAssembly;
     private readonly Workspace baselineWorkspace;
+    private readonly Workspace? inputSnapshot;
+    private readonly OutcomeCache? cache;
     private readonly TimeSpan timeout;
     private readonly List<string> originals = [];
     private readonly string? selector;
@@ -33,18 +36,51 @@ internal sealed class EvaluationSession : IDisposable
             if (Path.IsPathRooted(relativeAssembly) || !Workspace.Contains(testDirectory, switchedTestAssembly))
                 throw new IOException("The switched test assembly must be relative to and inside the test project directory.");
         }
-        baselineWorkspace = new Workspace(root, cancellation);
+        cache = OutcomeCache.Open(options.OutcomeCache, root, project, testProject);
+        if (cache is not null)
+            inputSnapshot = new Workspace(root, cancellation);
+        try
+        {
+            baselineWorkspace = new Workspace(inputSnapshot?.Root ?? root, cancellation);
+        }
+        catch
+        {
+            inputSnapshot?.Dispose();
+            throw;
+        }
         this.timeout = timeout;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
     }
 
-    public Task<RunResult> BaselineAsync(CancellationToken cancellation) =>
-        EvaluateAsync(baselineWorkspace.Map(testProject), cancellation);
+    public async Task<RunResult> BaselineAsync(CancellationToken cancellation)
+    {
+        var baseline = await EvaluateAsync(baselineWorkspace.Map(InputPath(testProject)), cancellation);
+        if (baseline.Outcome == Outcome.Passed && inputSnapshot is { SkippedLinks: false } snapshot)
+            await cache!.LoadAsync(snapshot.Root, baselineWorkspace.Root,
+                baselineWorkspace.Map(InputPath(testProject)), baselineWorkspace.Map(InputPath(project)),
+                timeout, cancellation);
+        return baseline;
+    }
+
+    public bool TryReuse(string key, [NotNullWhen(true)] out RunResult? result)
+    {
+        result = cache?.Find(key);
+        return result is not null;
+    }
+
+    public void Remember(string key, RunResult result) => cache?.Remember(key, result);
+
+    public void Save(RunReport report, CancellationToken cancellation) => cache?.Save(report, cancellation);
+
+    public bool ReusedOutcomesStillValid(CancellationToken cancellation) =>
+        cache?.ReusedOutcomesStillValid(cancellation) ?? true;
+
+    private string InputPath(string path) => inputSnapshot?.Map(path) ?? path;
 
     public async Task<SourceList> DiscoverAsync(CancellationToken cancellation)
     {
         var (result, paths) = await DiscoverSourcesAsync(
-            baselineWorkspace.Map(project), baselineWorkspace.Root, cancellation);
+            baselineWorkspace.Map(InputPath(project)), baselineWorkspace.Root, cancellation);
         var files = new List<SourceFile>();
         originals.Clear();
         foreach (var source in paths)
@@ -52,11 +88,11 @@ internal sealed class EvaluationSession : IDisposable
             cancellation.ThrowIfCancellationRequested();
             var relativePath = Path.GetRelativePath(baselineWorkspace.Root, source);
             var originalPath = Path.Combine(root, relativePath);
-            if (!File.Exists(originalPath))
+            if (!File.Exists(InputPath(originalPath)))
                 continue;
 
             var displayPath = relativePath.Replace(Path.DirectorySeparatorChar, '/');
-            var content = await File.ReadAllTextAsync(originalPath, cancellation);
+            var content = await File.ReadAllTextAsync(InputPath(originalPath), cancellation);
             originals.Add(originalPath);
             files.Add(new SourceFile(displayPath, content));
         }
@@ -69,9 +105,9 @@ internal sealed class EvaluationSession : IDisposable
         cancellation.ThrowIfCancellationRequested();
         try
         {
-            using var workspace = new Workspace(root, cancellation);
-            await File.WriteAllTextAsync(workspace.Map(originals[index]), mutatedSource, cancellation);
-            return await EvaluateAsync(workspace.Map(testProject), cancellation);
+            using var workspace = new Workspace(inputSnapshot?.Root ?? root, cancellation);
+            await File.WriteAllTextAsync(workspace.Map(InputPath(originals[index])), mutatedSource, cancellation);
+            return await EvaluateAsync(workspace.Map(InputPath(testProject)), cancellation);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
         {
@@ -143,6 +179,7 @@ internal sealed class EvaluationSession : IDisposable
 
     public void Dispose()
     {
+        using var snapshot = inputSnapshot;
         using var baseline = baselineWorkspace;
         switchedWorkspace?.Dispose();
     }

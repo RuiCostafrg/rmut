@@ -67,5 +67,46 @@
       "logical"
     ],
     "comparison_only": "Rmut does not support mutant exclusions"
+  },
+  "incremental-operators": {
+    "source": "fixtures/Conformance",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true,
+    "verify_outcome_reuse": true,
+    "rmut_seed_args": [
+      "--outcome-cache",
+      "{run_dir}/outcomes.bin",
+      "--cache-inputs",
+      "{workspace}/cache-inputs.json"
+    ],
+    "rmut_args": [
+      "--outcome-cache",
+      "{run_dir}/outcomes.bin",
+      "--cache-inputs",
+      "{workspace}/cache-inputs.json"
+    ],
+    "stryker_seed_config": {
+      "project-info": {"version": "benchmark-base"},
+      "since": {
+        "enabled": false,
+        "ignore-changes-in": ["**/bin/**", "**/obj/**", "**/TestResults/**"]
+      },
+      "baseline": {
+        "enabled": true,
+        "provider": "Disk"
+      }
+    },
+    "stryker_config": {
+      "project-info": {"version": "benchmark-base"},
+      "since": {
+        "enabled": false,
+        "ignore-changes-in": ["**/bin/**", "**/obj/**", "**/TestResults/**"]
+      },
+      "baseline": {
+        "enabled": true,
+        "provider": "Disk"
+      }
+    }
   }
 }

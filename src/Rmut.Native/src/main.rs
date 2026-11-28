@@ -70,6 +70,7 @@ enum Request<'a> {
         id: String,
     },
     Evaluate {
+        id: String,
         index: usize,
         mutated_source: String,
     },
@@ -186,6 +187,7 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
             let mut result: RunResult = match switched_result {
                 Some(result) => result,
                 None => host.call(Request::Evaluate {
+                    id: mutant.id.clone(),
                     index,
                     mutated_source: mutant.apply(&source.content),
                 })?,

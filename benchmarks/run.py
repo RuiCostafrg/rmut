@@ -136,15 +136,20 @@ def extract_source(spec, workspace, checkout):
                 raise ValueError(f"Unable to extract pinned revision {spec['revision']}")
 
 
-def tool_command(tool, args, spec, workspace, directory, *, seed=False):
-    run_dir = workspace.parent
+def tool_command(tool, args, spec, workspace, directory, *, seed=False, fresh=False):
+    run_dir = directory if fresh else workspace.parent
     if tool == "rmut":
         report = directory / "rmut.json"
         command = [str(args.rmut), "run", "--project", spec["project"],
                    "--test-project", spec["test_project"], "--json", str(report)]
+        options = spec.get("rmut_seed_args" if seed else "rmut_args", [])
+        if fresh:
+            pairs = zip(options[::2], options[1::2], strict=True)
+            options = [arg for key, value in pairs if key not in {"--outcome-cache", "--cache-inputs"}
+                       for arg in (key, value)]
         command.extend(
             arg.replace("{workspace}", str(workspace)).replace("{run_dir}", str(run_dir))
-            for arg in spec.get("rmut_seed_args" if seed else "rmut_args", [])
+            for arg in options
         )
         return command, workspace, report
 
@@ -162,6 +167,9 @@ def tool_command(tool, args, spec, workspace, directory, *, seed=False):
     if spec.get("shared_operators"):
         config["ignore-mutations"] = [*IGNORED_MUTATORS, *spec.get("additional_ignored_mutators", [])]
     config.update(spec.get("stryker_seed_config" if seed else "stryker_config", {}))
+    if fresh:
+        config.pop("since", None)
+        config.pop("baseline", None)
     config_file = directory / "stryker-config.json"
     write_json(config_file, {"stryker-config": config})
     return (
@@ -181,53 +189,113 @@ def run_tool(tool, args, spec, run_dir):
         if args.scenario == "incremental":
             subprocess.run(["git", "init", "-q", "-b", "benchmark-base"], cwd=workspace,
                            check=True)
+            commit = ["git", "-c", "user.name=Benchmark", "-c", "user.email=benchmark@example.invalid",
+                      "-c", "commit.gpgsign=false", "commit", "-q"]
+            disk_baseline = tool == "stryker" and spec.get("verify_outcome_reuse")
+            if disk_baseline:
+                # Stryker 5.1.0 also enables Git filtering with Disk baseline and defaults to master.
+                # Seed against an empty parent so every frozen source file is eligible.
+                subprocess.run([*commit, "--allow-empty", "-m", "Empty benchmark base"], cwd=workspace, check=True)
+                subprocess.run(["git", "branch", "master"], cwd=workspace, check=True)
             subprocess.run(["git", "add", "-f", "."], cwd=workspace, check=True)
-            subprocess.run(["git", "-c", "user.name=Benchmark", "-c",
-                            "user.email=benchmark@example.invalid", "-c", "commit.gpgsign=false",
-                            "commit", "-qm", "Frozen source"], cwd=workspace, check=True)
+            subprocess.run([*commit, "-m", "Frozen source"], cwd=workspace, check=True)
             seed_dir = run_dir / "seed"
             seed_dir.mkdir()
             seed = invoke(tool, args, spec, workspace, seed_dir, seed=True)
             result["seed"] = seed[0]
             if seed[0].get("error") or not seed[1] or differential(seed[1], seed[1])["unfinished"]:
                 raise ValueError("Incremental seed did not produce a completed mutation report")
-            if "incremental_patch" in spec:
-                patch = args.manifest.resolve().parent / spec["incremental_patch"]
-                subprocess.run(["git", "apply", str(patch)], cwd=workspace, check=True)
+            if disk_baseline:
+                subprocess.run(["git", "branch", "-f", "master", "HEAD"], cwd=workspace, check=True)
+            if args.incremental_patch is not None:
+                subprocess.run(["git", "apply", str(args.incremental_patch)], cwd=workspace, check=True)
         sample, records = invoke(tool, args, spec, workspace, run_dir)
         result.update(sample)
+        if args.scenario == "incremental":
+            fresh_dir = run_dir / "fresh"
+            fresh_dir.mkdir()
+            # Recreate the source to exclude build outputs from either incremental stage.
+            fresh_workspace = fresh_dir / "source"
+            shutil.copytree(args.output / "input", fresh_workspace, symlinks=True)
+            if args.incremental_patch is not None:
+                subprocess.run(["git", "apply", str(args.incremental_patch)], cwd=fresh_workspace, check=True)
+            fresh_sample, fresh_records = invoke(tool, args, spec, fresh_workspace, fresh_dir, fresh=True)
+            result["fresh"] = fresh_sample
+            result["seed_differential"] = differential(seed[1], records)
+            result["fresh_differential"] = differential(fresh_records, records)
+            if fresh_sample.get("error"):
+                raise ValueError("Fresh control did not produce a completed mutation report")
+            if tool == "rmut" and any(result["fresh_differential"].values()):
+                raise ValueError("Rmut incremental outcomes differ from fresh execution")
+            if tool == "rmut" and spec.get("verify_outcome_reuse"):
+                if sample["mutant_ids"] != fresh_sample["mutant_ids"]:
+                    raise ValueError("Rmut changed mutant IDs between cached and fresh execution")
+                expected = 0 if args.incremental_patch is not None else len(records)
+                if seed[0]["reused_outcomes"] != 0 or sample["reused_outcomes"] != expected:
+                    raise ValueError(f"Expected {expected} Rmut cache hits after an independent seed")
+            if args.measure:
+                if any(result["fresh_differential"].values()) or any(
+                    row["outcome"] not in {"killed", "survived"} for row in records.values()
+                ) or sample["reused_outcomes"] != 0:
+                    raise ValueError("Production benchmark requires fresh parity and execution of every mutant")
+                if tool == "stryker" and (sample.get("git_changed_files") != 1 or any(
+                    row["reason"] != "Mutant changed compared to target commit" for row in records.values()
+                )):
+                    raise ValueError("Stryker did not execute every mutant because of the production edit")
+            if tool == "stryker" and spec.get("verify_outcome_reuse"):
+                if seed[0]["reused_outcomes"] or not sample["baseline_loaded"]:
+                    raise ValueError("Stryker did not load an independently seeded baseline")
     except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.SubprocessError) as error:
         result["error"] = str(error)
     write_json(run_dir / "result.json", result)
     return result, records
 
 
-def invoke(tool, args, spec, workspace, directory, *, seed=False):
-    command, cwd, report = tool_command(tool, args, spec, workspace, directory, seed=seed)
+def invoke(tool, args, spec, workspace, directory, *, seed=False, fresh=False):
+    command, cwd, report = tool_command(tool, args, spec, workspace, directory, seed=seed, fresh=fresh)
     result = {"command": command, "cwd": str(cwd)}
     records = {}
     try:
         result.update(execute(command, cwd, directory / "tool.log", args.timeout,
-                              args.cgroup if args.measure and not seed else None))
+                              args.cgroup if args.measure and not seed and not fresh else None))
         if tool == "stryker":
-            report = workspace.parent / "reports" / "mutation-report.json"
+            report = (directory if fresh else workspace.parent) / "reports" / "mutation-report.json"
             if not report.is_file():
                 raise ValueError("Stryker did not write a JSON report")
             if seed:
                 report = report.rename(directory / "mutation-report.json")
             data = json.loads(report.read_text())
             records = stryker_records(data, workspace, spec["project"])
+            if args.scenario == "incremental":
+                log = (directory / "tool.log").read_text()
+                result["baseline_loaded"] = "Found baseline report for current branch" in log
+                changes = re.findall(r"\b(\d+) files changed\b", log)
+                if len(changes) == 1:
+                    result["git_changed_files"] = int(changes[0])
+                result["reused_outcomes"] = sum(
+                    row["outcome"] in ("killed", "survived") and row["reason"] == "Result based on previous run"
+                    for row in records.values()
+                )
         else:
             data = json.loads(report.read_text())
             records = rmut_records(data, workspace)
-            if spec.get("require_switched") and not seed:
+            if args.scenario == "incremental":
+                hits = re.findall(r"^Reused outcome ([a-fA-F0-9]{64})$",
+                                  (directory / "tool.log").read_text(), re.M)
+                ids = {mutant["id"] for mutant in data["mutants"]}
+                if len(ids) != len(data["mutants"]) or len(set(hits)) != len(hits) or set(hits) - ids:
+                    raise ValueError("Invalid Rmut mutant or cache-hit identities")
+                result["mutant_ids"] = sorted(ids)
+                result["reused_outcomes"] = len(hits)
+            if spec.get("require_switched") and not seed and not fresh:
                 switched_ids = re.findall(r"^Switched execution ([a-fA-F0-9]{64})$",
                                           (directory / "tool.log").read_text(), re.M)
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):
                     raise ValueError("Rmut did not use switched execution for every mutant")
-        if records and not any(row["outcome"] != "ignored" for row in records.values()):
+        stock_incremental = tool == "stryker" and args.scenario == "incremental" and not seed and not fresh
+        if records and not stock_incremental and not any(row["outcome"] != "ignored" for row in records.values()):
             raise ValueError("Mutation report contained only exclusions")
         if not records:
             raise ValueError("Mutation report contained no mutants or exclusions")
@@ -299,6 +367,7 @@ def main():
     parser.add_argument("--cgroup", type=Path)
     parser.add_argument("--checkout", type=Path)
     parser.add_argument("--scenario", choices=["clean", "incremental"], default="clean")
+    parser.add_argument("--incremental-patch", type=Path)
     parser.add_argument("--pairs", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=900)
@@ -324,9 +393,19 @@ def main():
         parser.error("--output must be outside the fixture source")
     if "source" not in spec and args.checkout is None:
         parser.error(f"Provide --checkout containing the frozen revision {spec['revision']}")
+    if args.scenario == "incremental" and args.incremental_patch is None and "incremental_patch" in spec:
+        args.incremental_patch = args.manifest.resolve().parent / spec["incremental_patch"]
+    if args.incremental_patch is not None:
+        if args.scenario != "incremental":
+            parser.error("--incremental-patch requires --scenario incremental")
+        args.incremental_patch = args.incremental_patch.resolve(strict=True)
+    if spec.get("verify_outcome_reuse") and args.scenario != "incremental":
+        parser.error("This workload requires --scenario incremental")
     if args.scenario == "incremental":
-        if args.measure:
-            parser.error("incremental measurement requires verified Rmut cache reuse")
+        production_patch = ROOT / "benchmarks/incremental/production.patch"
+        if args.measure and (args.workload != "incremental-operators" or
+                             args.incremental_patch != production_patch or not spec.get("verify_outcome_reuse")):
+            parser.error("incremental measurement requires the verified production-edit workload")
         if not all(spec.get(key) for key in (
             "stryker_seed_config", "stryker_config", "rmut_seed_args", "rmut_args",
         )):
@@ -347,6 +426,8 @@ def main():
     write_json(args.output / "environment.json", {
         "workload": args.workload, "spec": spec, "scenario": args.scenario,
         "source_sha256": source_hash(args.output / "input"),
+        "incremental_patch_sha256": hashlib.sha256(args.incremental_patch.read_bytes()).hexdigest()
+        if args.incremental_patch is not None else None,
         "stryker_tool": version.strip(), "rmut_tool": rmut_version.strip(),
         "dotnet": subprocess.check_output(["dotnet", "--info"], env=ENV, text=True, timeout=30),
         "host": list(os.uname()), "affinity": sorted(os.sched_getaffinity(0)),
@@ -413,7 +494,7 @@ def main():
     write_json(args.output / "summary.json", summary)
     print(json.dumps(summary, indent=2))
     passed = equivalent and (
-        not args.measure or all(row["verdict"] == "pass" for row in summary["performance"].values())
+        not args.measure or args.scenario == "incremental" or all(row["verdict"] == "pass" for row in summary["performance"].values())
     )
     return 0 if passed else 1
 
