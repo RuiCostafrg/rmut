@@ -14,6 +14,7 @@
     <NativeBinaryName Condition="'$(OS)' == 'Windows_NT'">rmut-native.exe</NativeBinaryName>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="Microsoft.Build.Framework" HintPath="$(MSBuildBinPath)/Microsoft.Build.Framework.dll" Private="false" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <InternalsVisibleTo Include="Rmut.Cli.Tests" />
     <AssemblyMetadata Include="RmutNativeRid" Value="$(NETCoreSdkRuntimeIdentifier)" />

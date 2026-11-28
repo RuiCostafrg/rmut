@@ -18,6 +18,7 @@ internal sealed class EvaluationSession : IDisposable
     private readonly string? switchedTestAssembly;
     private readonly Workspace baselineWorkspace;
     private readonly TimeSpan timeout;
+    private readonly string compilerCapture;
     private readonly List<string> originals = [];
     private readonly string? selector;
     private Workspace? switchedWorkspace;
@@ -35,17 +36,30 @@ internal sealed class EvaluationSession : IDisposable
                 throw new IOException("The switched test assembly must be relative to and inside the test project directory.");
         }
         baselineWorkspace = new Workspace(root, cancellation);
+        compilerCapture = Path.Combine(baselineWorkspace.Root, $"rmut-compile-{Guid.NewGuid():N}.json");
         this.timeout = timeout;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
     }
 
-    public Task<RunResult> BaselineAsync(CancellationToken cancellation) =>
-        EvaluateAsync(baselineWorkspace.Map(testProject), cancellation);
+    public async Task<RunResult> BaselineAsync(CancellationToken cancellation)
+    {
+        await File.WriteAllTextAsync(compilerCapture, baselineWorkspace.Map(project), cancellation);
+        var loggerAssembly = typeof(EvaluationSession).Assembly.Location;
+        var test = baselineWorkspace.Map(testProject);
+        var build = await BuildAsync(test, cancellation, additionalArguments:
+        [
+            "-property:ProvideCommandLineArgs=true",
+            // Enable task-parameter events without printing a diagnostic console log.
+            "-verbosity:diagnostic",
+            "-consoleloggerparameters:Verbosity=minimal",
+            $"-logger:Rmut.Cli.CompileInputsLogger,{loggerAssembly};{compilerCapture}"
+        ]);
+        return build.Outcome == Outcome.Passed ? await TestAsync(test, cancellation) : build;
+    }
 
     public async Task<SourceList> DiscoverAsync(CancellationToken cancellation)
     {
-        var (result, paths, parseOptions) = await DiscoverSourcesAsync(
-            baselineWorkspace.Map(project), baselineWorkspace.Root, cancellation);
+        var (result, paths, parseOptions) = await DiscoverSourcesAsync(cancellation);
         var files = new List<SourceFile>();
         originals.Clear();
         foreach (var source in paths)
@@ -154,52 +168,33 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<(RunResult Result, string[] Paths, CSharpParseOptions? ParseOptions)> DiscoverSourcesAsync(
-        string project, string workspace, CancellationToken cancellation)
+        CancellationToken cancellation)
     {
-        var process = await DotnetProcess.RunAsync(Path.GetDirectoryName(project)!, timeout, cancellation,
-            "msbuild", project, "-nologo", "-target:Compile", "-property:SkipCompilerExecution=true",
-            "-property:ProvideCommandLineArgs=true",
-            $"-property:NonExistentFile=rmut-{Guid.NewGuid():N}.missing",
-            "-getProperty:TargetFrameworks", "-getItem:Compile,CscCommandLineArgs");
-        if (process.TimedOut)
-            return (new RunResult(Outcome.TimedOut, "Production source discovery timed out."), [], null);
-        if (process.ExitCode != 0)
-            return (new RunResult(Outcome.RunnerError, process.Diagnostics), [], null);
-
         try
         {
-            using var document = JsonDocument.Parse(process.Output);
-            var properties = document.RootElement.GetProperty("Properties");
-            var frameworks = properties.GetProperty("TargetFrameworks").GetString();
-            if (!string.IsNullOrWhiteSpace(frameworks))
-                return (new RunResult(Outcome.RunnerError, "The production project must use TargetFramework."), [], null);
+            using var stream = File.OpenRead(compilerCapture);
+            var compilations = await JsonSerializer.DeserializeAsync<CompilerInputs[]>(stream, cancellationToken: cancellation);
+            if (compilations is not [{ Arguments.Length: > 0 } inputs])
+                return (new RunResult(Outcome.RunnerError,
+                    "The test build must compile the production project exactly once and expose its compiler inputs."), [], null);
 
-            var items = document.RootElement.GetProperty("Items");
-            var arguments = items.GetProperty("CscCommandLineArgs").EnumerateArray()
-                .Select(item => item.GetProperty("Identity").GetString()!)
-                .ToArray();
-            if (arguments.Length == 0)
-                return (new RunResult(Outcome.RunnerError, "MSBuild did not return C# compiler inputs."), [], null);
-
-            var compiler = CSharpCommandLineParser.Default.Parse(arguments, Path.GetDirectoryName(project)!, null);
-            var compilerSources = compiler.SourceFiles.Select(file => file.Path).ToHashSet(
-                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-            var paths = items.GetProperty("Compile").EnumerateArray()
-                .Where(item => !string.Equals(item.TryGetProperty("AutoGen", out var autoGen) ? autoGen.GetString() : null,
-                    "true", StringComparison.OrdinalIgnoreCase))
-                .Select(item => item.GetProperty("FullPath").GetString()!)
-                .Where(path => compilerSources.Contains(path) &&
-                    Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
-                .Distinct()
+            var directory = Path.GetDirectoryName(baselineWorkspace.Map(project))!;
+            var compiler = CSharpCommandLineParser.Default.Parse(inputs.Arguments, directory, null);
+            var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var generated = inputs.GeneratedSources.Select(path => Path.GetFullPath(path, directory)).ToHashSet(comparer);
+            var paths = compiler.SourceFiles
+                .Select(file => file.Path)
+                .Where(path => !generated.Contains(path) && Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+                .Distinct(comparer)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
-            var externalSource = paths.FirstOrDefault(path => !Workspace.Contains(workspace, path));
+            var externalSource = paths.FirstOrDefault(path => !Workspace.Contains(baselineWorkspace.Root, path));
             if (externalSource is not null)
                 return (new RunResult(Outcome.RunnerError, $"Production source is outside the workspace: {externalSource}"), [], null);
 
             return (new RunResult(Outcome.Passed), paths, compiler.ParseOptions);
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             return (new RunResult(Outcome.RunnerError, $"Invalid MSBuild source list: {ex.Message}"), [], null);
         }
@@ -212,9 +207,11 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<RunResult> BuildAsync(string testProject, CancellationToken cancellation,
-        bool rejectFrameworkTypeConflicts = false)
+        bool rejectFrameworkTypeConflicts = false, string[]? additionalArguments = null)
     {
         string[] arguments = ["build", testProject, "--disable-build-servers", "--nologo"];
+        if (additionalArguments is not null)
+            arguments = [.. arguments, .. additionalArguments];
         if (rejectFrameworkTypeConflicts)
             arguments = [.. arguments, "-warnaserror:CS0436"];
         var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation, arguments);
