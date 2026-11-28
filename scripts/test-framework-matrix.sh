@@ -54,7 +54,7 @@ for mode in off on; do
     "${collector[@]}" 2>&1 | tee "$artifacts/$mode.log"; then
     status=1
   fi
-  if [[ "$(rg -c '^Switched execution ' "$artifacts/$mode.log")" != 2 ]]; then
+  if [[ "$(grep -c '^Switched execution ' "$artifacts/$mode.log")" != 2 ]]; then
     echo "Expected both mutants to use switched execution with Coverlet $mode." >&2
     status=1
   fi

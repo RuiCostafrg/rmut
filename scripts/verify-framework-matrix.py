@@ -36,7 +36,9 @@ def verify_mutants(report_path):
 
 
 def verify_coverage(directory):
-    report = ET.parse(only(directory.rglob("coverage.cobertura.xml")))
+    # VSTest can also copy the collector report into the TRX attachment directory.
+    reports = {path.read_bytes() for path in directory.rglob("coverage.cobertura.xml")}
+    report = ET.fromstring(only(reports))
     production_class = only(entry for entry in report.findall(".//class")
                             if entry.attrib["name"] == "FrameworkMatrix.Calculator")
     assert Path(production_class.attrib["filename"]).name == "Calculator.cs"
