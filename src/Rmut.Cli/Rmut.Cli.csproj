@@ -14,7 +14,8 @@
     <NativeBinaryName Condition="'$(OS)' == 'Windows_NT'">rmut-native.exe</NativeBinaryName>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="Microsoft.Build.Framework" HintPath="$(MSBuildBinPath)/Microsoft.Build.Framework.dll" Private="false" />
+    <!-- The baseline SDK supplies the logger's runtime assembly. -->
+    <PackageReference Include="Microsoft.Build.Framework" Version="18.0.2" IncludeAssets="compile" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <InternalsVisibleTo Include="Rmut.Cli.Tests" />
     <AssemblyMetadata Include="RmutNativeRid" Value="$(NETCoreSdkRuntimeIdentifier)" />
