@@ -88,6 +88,10 @@
     ],
     "stryker_seed_config": {
       "project-info": {"version": "benchmark-base"},
+      "since": {
+        "enabled": false,
+        "ignore-changes-in": ["**/bin/**", "**/obj/**", "**/TestResults/**"]
+      },
       "baseline": {
         "enabled": true,
         "provider": "Disk"
@@ -95,6 +99,10 @@
     },
     "stryker_config": {
       "project-info": {"version": "benchmark-base"},
+      "since": {
+        "enabled": false,
+        "ignore-changes-in": ["**/bin/**", "**/obj/**", "**/TestResults/**"]
+      },
       "baseline": {
         "enabled": true,
         "provider": "Disk"

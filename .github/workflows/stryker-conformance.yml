@@ -75,6 +75,7 @@ jobs:
           assert outcomes(stryker["fresh"]) == outcomes(rmut["fresh"])
           assert not any(rmut["fresh_differential"].values())
           assert stryker["baseline_loaded"] and stryker["reused_outcomes"] == 0
+          assert stryker["git_changed_files"] == (0 if scenario == "unchanged" else 1), stryker
 
           diff = rmut["seed_differential"]
           if scenario == "test-only":

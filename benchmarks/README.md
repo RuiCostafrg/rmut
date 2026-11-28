@@ -72,6 +72,9 @@ Keep `environment.json`, `summary.json`, and every `pair.json`, tool log and rep
 This fixture uses Stryker.NET 5.1.0's Disk baseline. The harness records baseline loading
 and counts report entries marked `Result based on previous run`. In this version the
 baseline writer keys files by full path and the filter looks up relative paths, so a
-loaded baseline can produce zero reused outcomes.
+loaded baseline can produce zero reused outcomes. Its Git diff ignores generated
+`bin`, `obj`, and `TestResults` files so build output does not trigger reruns in the
+unchanged case. The comparison records ignored mutants as differences from fresh
+results.
 [Report writer](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/Reporters/Json/JsonReport.cs#L60-L69)
 [Baseline filter](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/MutantFilters/BaselineMutantFilter.cs#L69-L108)

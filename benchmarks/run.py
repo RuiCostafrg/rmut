@@ -258,8 +258,11 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False, fresh=False):
             data = json.loads(report.read_text())
             records = stryker_records(data, workspace, spec["project"])
             if args.scenario == "incremental":
-                result["baseline_loaded"] = "Found baseline report for current branch" in (
-                    directory / "tool.log").read_text()
+                log = (directory / "tool.log").read_text()
+                result["baseline_loaded"] = "Found baseline report for current branch" in log
+                changes = re.findall(r"\b(\d+) files changed\b", log)
+                if len(changes) == 1:
+                    result["git_changed_files"] = int(changes[0])
                 result["reused_outcomes"] = sum(
                     row["outcome"] in ("killed", "survived") and row["reason"] == "Result based on previous run"
                     for row in records.values()
