@@ -90,10 +90,10 @@ jobs:
           diff = pair["differential"]
           assert not diff["stryker_only"] and not diff["rmut_only"] and not diff["unfinished"], diff
           for row in diff["outcome_mismatches"]:
-              assert row["stryker"] == {
-                  "outcome": "ignored", "reason": "Mutant not changed compared to target commit",
+              assert row["stryker"]["outcome"] == "ignored" and row["stryker"]["reason"] in {
+                  "Mutant not changed compared to target commit", "Removed by since filter",
               }, diff
-          if scenario == "unchanged":
+          if scenario in ("unchanged", "test-only"):
               assert len(diff["outcome_mismatches"]) == len(rmut["mutants"]), diff
           if scenario == "production":
               assert not any(diff.values()), diff

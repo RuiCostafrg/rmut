@@ -75,6 +75,8 @@ baseline writer keys files by full path and the filter looks up relative paths, 
 loaded baseline can produce zero reused outcomes. Its Git diff ignores generated
 `bin`, `obj`, and `TestResults` files so build output does not trigger reruns in the
 unchanged case. The comparison records ignored mutants as differences from fresh
-results.
+results. In the test-only fixture, Stryker's filter ignored every mutant while fresh
+execution killed the newly asserted mutant. Rmut invalidated all outcomes and reported
+the new kill.
 [Report writer](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/Reporters/Json/JsonReport.cs#L60-L69)
 [Baseline filter](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/MutantFilters/BaselineMutantFilter.cs#L69-L108)
