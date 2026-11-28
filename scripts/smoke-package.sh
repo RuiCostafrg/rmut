@@ -13,16 +13,36 @@ work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 work=$(cd -- "$work" && pwd -P)
 
+work_for_dotnet=$work
+tool="$work/tools/rmut"
+if [[ ${OSTYPE:-} == msys* ]]; then
+  # .NET reads NUGET_PACKAGES directly from the environment.
+  work_for_dotnet=$(cygpath -am "$work")
+  tool="$tool.exe"
+fi
+
 fixture="$repo/fixtures/Consumer"
 mkdir -p "$work/consumer/Calculator" "$work/consumer/Calculator.Tests"
 cp -- "$fixture"/Calculator/*.{cs,csproj} "$work/consumer/Calculator/"
 cp -- "$fixture"/Calculator.Tests/*.{cs,csproj} "$work/consumer/Calculator.Tests/"
 
+mkdir "$work/feed"
+cp -- "$feed/Rmut.$version.nupkg" "$work/feed/"
+cat > "$work/tool.NuGet.Config" <<'EOF_CONFIG'
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="smoke-test" value="./feed" />
+  </packageSources>
+</configuration>
+EOF_CONFIG
+
 cd -- "$work/consumer"
-NUGET_PACKAGES="$work/packages" dotnet tool install Rmut --version "$version" \
-  --tool-path "$work/tools" --source "$feed" --no-http-cache
-"$work/tools/rmut" run --project Calculator/Calculator.csproj \
-  --test-project Calculator.Tests/Calculator.Tests.csproj --json "$work/report.json"
+NUGET_PACKAGES="$work_for_dotnet/packages" dotnet tool install Rmut --version "$version" \
+  --tool-path "$work_for_dotnet/tools" --configfile "$work_for_dotnet/tool.NuGet.Config" --no-http-cache
+"$tool" run --project Calculator/Calculator.csproj \
+  --test-project Calculator.Tests/Calculator.Tests.csproj --json "$work_for_dotnet/report.json"
 
 if ! jq -e '
   .baseline.outcome == "passed" and
