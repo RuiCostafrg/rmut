@@ -26,8 +26,8 @@ internal static class NativeRunner
     private abstract record Request;
     private sealed record Baseline : Request;
     private sealed record Sources : Request;
-    private sealed record Prepare(InstrumentedFile[] Files) : Request;
-    private sealed record EvaluateSwitched(string Id) : Request;
+    private sealed record Prepare(InstrumentedFile[] Files, string? FirstMutant) : Request;
+    private sealed record EvaluateSwitched(string[] Ids) : Request;
     private sealed record Evaluate(int Index, string MutatedSource) : Request;
     private sealed record Log(string Text) : Request;
     private sealed record Finish(RunReport Report) : Request;
@@ -41,7 +41,7 @@ internal static class NativeRunner
         if (packagedRid != RuntimeInformation.RuntimeIdentifier)
             throw new IOException($"The installed Rmut engine targets {packagedRid}. This runtime is {RuntimeInformation.RuntimeIdentifier}.");
 
-        using var session = new EvaluationSession(options, timeout, cancellation);
+        await using var session = new EvaluationSession(options, timeout, cancellation);
         var binaryName = OperatingSystem.IsWindows() ? "rmut-native.exe" : "rmut-native";
         var packagedBinary = Path.Combine(Path.GetDirectoryName(assembly.Location)!, binaryName);
         // NuGet extraction may discard executable permissions. Restore them on a private copy.
@@ -84,7 +84,10 @@ internal static class NativeRunner
                 switch (request)
                 {
                     case Baseline:
-                        await ReplyAsync(await session.BaselineAsync(cancellation));
+                        var baseline = await session.BaselineAsync(cancellation);
+                        if (session.UsedBaselineBuildMode != BaselineBuildMode.Default)
+                            log($"Baseline build mode: {session.UsedBaselineBuildMode}");
+                        await ReplyAsync(baseline);
                         break;
                     case Sources:
                         var sources = await session.DiscoverAsync(cancellation);
@@ -92,17 +95,44 @@ internal static class NativeRunner
                         await ReplyAsync(sources);
                         break;
                     case Prepare preparation when preparation.Files is { Length: > 0 } &&
+                        (preparation.FirstMutant is null ||
+                            (session.SwitchedWorkers == 2 && preparation.FirstMutant.Length == 64)) &&
                         preparation.Files.All(file => file is not null && (uint)file.Index < (uint)sourceCount &&
                             file.Content is not null):
-                        var ready = await session.PrepareSwitchedAsync(preparation.Files, cancellation);
-                        log(ready ? "Switched build ready." : "Switched build unavailable. Using fresh execution.");
-                        await ReplyAsync(ready);
+                        var prepared = await session.PrepareSwitchedAsync(
+                            preparation.Files, preparation.FirstMutant, cancellation);
+                        log(prepared.Build switch
+                        {
+                            SwitchedBuild.Incremental or SwitchedBuild.IncrementalWithDirectConsole => "Incremental switched build ready.",
+                            SwitchedBuild.Clean => "Switched build ready.",
+                            _ => "Switched build unavailable. Using fresh execution."
+                        });
+                        if (prepared.Build == SwitchedBuild.IncrementalWithDirectConsole)
+                            log("Direct VSTest console ready.");
+                        if (prepared.FirstResult is not null)
+                        {
+                            log("Switched control completed with a speculative mutant.");
+                            log($"Switched execution {preparation.FirstMutant}");
+                        }
+                        await ReplyAsync(new
+                        {
+                            Ready = prepared.Build != SwitchedBuild.Unavailable,
+                            prepared.FirstResult
+                        });
                         break;
-                    case EvaluateSwitched evaluation when evaluation.Id is { Length: 64 }:
-                        var switched = await session.EvaluateSwitchedAsync(evaluation.Id, cancellation);
-                        if (switched is not null)
-                            log($"Switched execution {evaluation.Id}");
-                        await ReplyAsync(switched);
+                    case EvaluateSwitched evaluation when evaluation.Ids is { Length: > 0 } &&
+                        evaluation.Ids.Length <= session.SwitchedWorkers &&
+                        evaluation.Ids.All(id => id is { Length: 64 }):
+                        var results = await Task.WhenAll(evaluation.Ids.Select(id =>
+                            session.EvaluateSwitchedAsync(id, cancellation)));
+                        if (results.Length > 1)
+                            log($"Switched batch completed with {results.Length} workers.");
+                        for (var index = 0; index < results.Length; index++)
+                        {
+                            if (results[index] is not null)
+                                log($"Switched execution {evaluation.Ids[index]}");
+                        }
+                        await ReplyAsync(results);
                         break;
                     case Evaluate evaluation when (uint)evaluation.Index < (uint)sourceCount &&
                         evaluation.MutatedSource is not null:

@@ -34,6 +34,27 @@ same suite as running the project. Projects that configure runsettings, filters,
 adapters, or test targets through MSBuild should use project-based execution.
 The original baseline and fresh fallback still run through the test project.
 
+Use `--execution switched-incremental` with `--switched-test-assembly`
+for projects whose restore and build inputs are independent of the
+instrumented source bodies. Baseline tests must finish all writes to the
+workspace before returning. Rmut snapshots the successful baseline build
+before running the original project tests, then uses those intermediates
+for the switched build at the same path. When the SDK ships a VSTest
+console and there is no SDK or runner override, switched tests launch that
+console directly. A failed incremental build or control run retries from
+a clean copy. Add `--switched-workers 2` to run pairs of switched mutants
+concurrently in separate processes and workspaces. The first switched
+mutant can run alongside the control, and its result counts only if the
+control passes. Use two workers when
+the suite's simultaneous runs can use external resources independently.
+
+For projects that support Roslyn shared compilation, `--switched-compiler
+private-server` reuses a compiler process across the original and
+instrumented SDK builds. The server is private to the run and shuts
+down before switched tests start. If the SDK compiler is unavailable or
+the shared baseline build fails, Rmut uses standalone compilation. Test
+processes remain isolated.
+
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 
 ## Verify a local package

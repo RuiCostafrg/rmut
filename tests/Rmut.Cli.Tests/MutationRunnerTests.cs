@@ -35,11 +35,13 @@ public sealed class MutationRunnerTests
     }
 
     [Theory]
-    [InlineData(null, true)]
-    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true)]
-    [InlineData("bin/Debug/net10.0/Missing.Tests.dll", false)]
+    [InlineData(null, true, false, 1)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, false, 1)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, true, 1)]
+    [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true, true, 2)]
+    [InlineData("bin/Debug/net10.0/Missing.Tests.dll", false, false, 1)]
     public async Task SwitchedExecutionMatchesFreshWithInitializationAndIsolatedState(
-        string? assembly, bool expectSwitched)
+        string? assembly, bool expectSwitched, bool reuseBaselineBuild, int switchedWorkers)
     {
         using var fixture = new Fixture("""
             const string marker = "mutation-test-marker";
@@ -54,30 +56,125 @@ public sealed class MutationRunnerTests
             """, """
             public static class Calculator
             {
+                public static readonly int UnsupportedInitializer = 4 + 2;
                 public static readonly int Initialized = Add(3, 2);
                 private static int calls;
                 public static int Add(int left, int right) => left + right;
                 public static bool Untested(int value) => value > 0;
                 public static int Next() => System.Threading.Interlocked.Increment(ref calls);
-                public static readonly int UnsupportedInitializer = 4 + 2;
                 public const int UnsupportedConstant = 3 * 0;
             }
             """);
         var log = new List<string>();
         var fresh = await fixture.RunNativeAsync();
-        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add, switchedTestAssembly: assembly);
+        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add, switchedTestAssembly: assembly,
+            reuseBaselineBuild: reuseBaselineBuild, switchedWorkers: switchedWorkers);
 
         Assert.Equal(Outcome.Passed, switched.Baseline.Outcome);
         Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
         Assert.Collection(switched.Mutants,
+            mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Killed, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
-            mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
+        Assert.Equal(reuseBaselineBuild, log.Contains("Incremental switched build ready."));
+        Assert.Equal(switchedWorkers == 2, log.Contains("Switched control completed with a speculative mutant."));
         string[] expectedExecutions = expectSwitched
-            ? [$"Switched execution {switched.Mutants[0].Id}", $"Switched execution {switched.Mutants[1].Id}"]
+            ? [$"Switched execution {switched.Mutants[1].Id}", $"Switched execution {switched.Mutants[2].Id}"]
             : [];
         Assert.Equal(expectedExecutions, log.Where(line => line.StartsWith("Switched execution ", StringComparison.Ordinal)));
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task FailedSharedCompilationRetriesTheOriginalBuildInACleanWorkspace()
+    {
+        using var proof = new TemporaryDirectory();
+        var attempted = Path.Combine(proof.Directory.FullName, "attempted");
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """, $$"""
+            <Project>
+              <Target Name="RejectSharedCompilation" BeforeTargets="CoreCompile">
+                <Error Condition="Exists('$(IntermediateOutputPath)shared-attempt')" Text="Workspace was reused." />
+                <WriteLinesToFile Condition="'$(SharedCompilationId)' != ''"
+                    File="$(IntermediateOutputPath)shared-attempt" Lines="shared" />
+                <WriteLinesToFile Condition="'$(SharedCompilationId)' != ''"
+                    File="{{System.Security.SecurityElement.Escape(attempted)}}" Lines="shared" />
+                <Error Condition="'$(SharedCompilationId)' != ''" Text="No shared compilation for this project." />
+              </Target>
+            </Project>
+            """);
+        var report = await fixture.RunNativeAsync(switched: true,
+            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true, useCompilerServer: true);
+
+        Assert.True(File.Exists(attempted));
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Equal(Outcome.Killed, Assert.Single(report.Mutants).Outcome);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task FailedSwitchedControlDiscardsSpeculativeResult()
+    {
+        using var fixture = new Fixture("""
+            const string selectorPrefix = "RMUT_MUTANT_";
+            var selectorBytes = System.Text.Encoding.Unicode.GetBytes(selectorPrefix);
+            var assembly = System.IO.File.ReadAllBytes(typeof(Calculator).Assembly.Location);
+            if (System.MemoryExtensions.IndexOf<byte>((System.ReadOnlySpan<byte>)assembly, selectorBytes) >= 0)
+            {
+                var names = System.Environment.GetEnvironmentVariables().Keys;
+                Assert.Contains(System.Linq.Enumerable.Cast<string>(names),
+                    name => name.StartsWith(selectorPrefix, System.StringComparison.Ordinal));
+                return;
+            }
+
+            Assert.Equal(5, Calculator.Tested());
+            """, """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """);
+        var log = new List<string>();
+        var report = await fixture.RunNativeAsync(switched: true, log: log.Add,
+            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true, switchedWorkers: 2, useCompilerServer: true);
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Equal(Outcome.Killed, Assert.Single(report.Mutants).Outcome);
+        Assert.Contains("Switched build unavailable. Using fresh execution.", log);
+        Assert.DoesNotContain(log, line => line.StartsWith("Switched execution ", StringComparison.Ordinal));
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task FailedIncrementalBuildRetriesInACleanWorkspace()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """, """
+            <Project>
+              <Target Name="RequireCleanBuild" BeforeTargets="CoreCompile">
+                <Error Condition="Exists('$(IntermediateOutputPath)built')" Text="Clean build required." />
+                <WriteLinesToFile File="$(IntermediateOutputPath)built" Lines="built" />
+              </Target>
+            </Project>
+            """);
+        var log = new List<string>();
+        var report = await fixture.RunNativeAsync(switched: true, log: log.Add,
+            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true);
+
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        var mutant = Assert.Single(report.Mutants);
+        Assert.Equal(Outcome.Killed, mutant.Outcome);
+        Assert.Contains("Switched build ready.", log);
+        Assert.Contains($"Switched execution {mutant.Id}", log);
         fixture.AssertInputsUnchanged();
     }
 
@@ -222,7 +319,7 @@ public sealed class MutationRunnerTests
         private readonly RunOptions options;
         private readonly Dictionary<string, string> inputs;
 
-        public Fixture(string assertion, string source = Source)
+        public Fixture(string assertion, string source = Source, string? buildTargets = null)
         {
             inputs = new()
             {
@@ -260,6 +357,9 @@ public sealed class MutationRunnerTests
                     """
             };
 
+            if (buildTargets is not null)
+                inputs.Add("Directory.Build.targets", buildTargets);
+
             foreach (var (relative, content) in inputs)
             {
                 var path = Path.Combine(root.FullName, relative);
@@ -275,8 +375,13 @@ public sealed class MutationRunnerTests
             new ManagedReferenceRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
-            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null) =>
-            NativeRunner.RunAsync(options with { Switched = switched, SwitchedTestAssembly = switchedTestAssembly },
+            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null,
+            bool reuseBaselineBuild = false, int switchedWorkers = 1, bool useCompilerServer = false) =>
+            NativeRunner.RunAsync(options with
+            {
+                Switched = switched, SwitchedTestAssembly = switchedTestAssembly, ReuseBaselineBuild = reuseBaselineBuild,
+                SwitchedWorkers = switchedWorkers, UseCompilerServer = useCompilerServer
+            },
                 timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);
 

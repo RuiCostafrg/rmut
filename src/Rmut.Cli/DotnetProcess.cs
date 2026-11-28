@@ -11,8 +11,13 @@ internal sealed record ProcessResult(int ExitCode, string Output, string Error, 
 
 internal static class DotnetProcess
 {
+    public static Task<ProcessResult> RunAsync(
+        string directory, TimeSpan timeout, CancellationToken cancellation, params string[] arguments) =>
+        RunAsync(directory, timeout, cancellation, null, arguments);
+
     public static async Task<ProcessResult> RunAsync(
-        string directory, TimeSpan timeout, CancellationToken cancellation, params string[] arguments)
+        string directory, TimeSpan timeout, CancellationToken cancellation,
+        IReadOnlyDictionary<string, string>? environment, string[] arguments)
     {
         cancellation.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo
@@ -25,6 +30,12 @@ internal static class DotnetProcess
         };
         foreach (var argument in arguments)
             start.ArgumentList.Add(argument);
+
+        if (environment is not null)
+        {
+            foreach (var (name, value) in environment)
+                start.Environment[name] = value;
+        }
 
         using var process = Process.Start(start) ?? throw new IOException("Could not start dotnet.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);

@@ -221,8 +221,28 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
             data = json.loads(report.read_text())
             records = rmut_records(data, workspace)
             if spec.get("require_switched") and not seed:
-                switched_ids = re.findall(r"^Switched execution ([a-fA-F0-9]{64})$",
-                                          (directory / "tool.log").read_text(), re.M)
+                log = (directory / "tool.log").read_text()
+                switched_ids = re.findall(r"^Switched execution ([a-fA-F0-9]{64})$", log, re.M)
+                if spec.get("require_incremental"):
+                    result["incremental_build"] = "Incremental switched build ready." in log.splitlines()
+                    if not result["incremental_build"]:
+                        raise ValueError("Rmut did not use the incremental switched build")
+                if spec.get("require_direct_vstest"):
+                    result["direct_vstest"] = "Direct VSTest console ready." in log.splitlines()
+                    if not result["direct_vstest"]:
+                        raise ValueError("Rmut did not use the direct VSTest console")
+                if expected_batches := spec.get("require_parallel_batches"):
+                    result["parallel_batches"] = log.splitlines().count("Switched batch completed with 2 workers.")
+                    if result["parallel_batches"] != expected_batches:
+                        raise ValueError("Rmut did not complete the expected two-worker batches")
+                if spec.get("require_parallel_control"):
+                    result["parallel_control"] = "Switched control completed with a speculative mutant." in log.splitlines()
+                    if not result["parallel_control"]:
+                        raise ValueError("Rmut did not complete the switched control alongside a mutant")
+                if baseline_mode := spec.get("require_baseline_build"):
+                    result["baseline_build"] = f"Baseline build mode: {baseline_mode}" in log.splitlines()
+                    if not result["baseline_build"]:
+                        raise ValueError("Rmut did not use the requested baseline build mode")
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):
