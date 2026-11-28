@@ -87,20 +87,12 @@
       "{workspace}/cache-inputs.json"
     ],
     "stryker_seed_config": {
-      "since": {
-        "enabled": true,
-        "target": "benchmark-base"
-      },
       "baseline": {
         "enabled": true,
         "provider": "Disk"
       }
     },
     "stryker_config": {
-      "since": {
-        "enabled": true,
-        "target": "benchmark-base"
-      },
       "baseline": {
         "enabled": true,
         "provider": "Disk"

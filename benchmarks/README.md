@@ -68,3 +68,10 @@ benchmarks/incremental/production.patch`. These runs validate correctness. The c
 workflow uses its existing workloads and output directories.
 
 Keep `environment.json`, `summary.json`, and every `pair.json`, tool log and report for audit. The [baseline log](BASELINE.md) records current evidence.
+
+This fixture uses Stryker.NET 5.1.0's Disk baseline. The harness records baseline loading
+and counts report entries marked `Result based on previous run`. In this version the
+baseline writer keys files by full path and the filter looks up relative paths, so a
+loaded baseline can produce zero reused outcomes.
+[Report writer](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/Reporters/Json/JsonReport.cs#L60-L69)
+[Baseline filter](https://github.com/stryker-mutator/stryker-net/blob/7052fa6c646a6bdfb143608e695d11542e2be815/src/Stryker.Core/Stryker.Core/MutantFilters/BaselineMutantFilter.cs#L69-L108)

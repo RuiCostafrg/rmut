@@ -58,7 +58,7 @@ internal sealed class OutcomeCache
 
             var sdk = await DotnetProcess.RunAsync(Path.GetDirectoryName(baselineProject)!, timeout, cancellation,
                 "msbuild", baselineProject, "-nologo", "-getProperty:MSBuildSDKsPath",
-                "-getProperty:ProjectAssetsFile");
+                "-getProperty:ProjectAssetsFile", "-getProperty:TargetPath");
             if (sdk.ExitCode != 0 || sdk.TimedOut)
                 return;
 
@@ -69,6 +69,20 @@ internal sealed class OutcomeCache
             var assetsPath = properties.GetProperty("ProjectAssetsFile").GetString()!;
             if (install is null || !Path.IsPathFullyQualified(assetsPath) ||
                 !Workspace.Contains(baselineRoot, assetsPath))
+                return;
+
+            var testAssembly = properties.GetProperty("TargetPath").GetString()!;
+            var production = await DotnetProcess.RunAsync(Path.GetDirectoryName(baselineProduction)!, timeout,
+                cancellation, "msbuild", baselineProduction, "-nologo", "-getProperty:TargetPath");
+            var productionAssembly = production.Output.Trim();
+            if (production.ExitCode != 0 || production.TimedOut ||
+                !Path.IsPathFullyQualified(testAssembly) || !Path.IsPathFullyQualified(productionAssembly) ||
+                !Workspace.Contains(baselineRoot, testAssembly) || !Workspace.Contains(baselineRoot, productionAssembly) ||
+                !File.Exists(testAssembly))
+                return;
+
+            var copiedAssembly = Path.Combine(Path.GetDirectoryName(testAssembly)!, Path.GetFileName(productionAssembly));
+            if (!FileDigest(productionAssembly).AsSpan().SequenceEqual(FileDigest(copiedAssembly)))
                 return;
 
             var binary = OperatingSystem.IsWindows() ? "rmut-native.exe" : "rmut-native";
@@ -191,6 +205,8 @@ internal sealed class OutcomeCache
                     throw new IOException("Linked directory in outcome inputs.");
                 Add("directory");
                 Add(name);
+                if (!OperatingSystem.IsWindows())
+                    Add(((int)File.GetUnixFileMode(file)).ToString(System.Globalization.CultureInfo.InvariantCulture));
                 foreach (var child in directory.EnumerateFileSystemInfos().OrderBy(entry => entry.Name, StringComparer.Ordinal))
                     AddTree(child.Name, child.FullName);
                 Add("end");
@@ -199,8 +215,11 @@ internal sealed class OutcomeCache
 
             Add("file");
             Add(name);
-            using var stream = File.OpenRead(file);
-            hash.AppendData(SHA256.HashData(stream));
+            if (!OperatingSystem.IsWindows())
+                Add(((int)File.GetUnixFileMode(file)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var target = new FileInfo(file).LinkTarget;
+            Add(target ?? "");
+            hash.AppendData(FileDigest(file));
         }
 
         Add("rmut-outcomes-v1");
@@ -228,7 +247,7 @@ internal sealed class OutcomeCache
     {
         var restore = assets.GetProperty("project").GetProperty("restore");
         var projectDirectory = Path.GetDirectoryName(restore.GetProperty("projectPath").GetString()!)!;
-        var foundProduction = false;
+        string? productionLibrary = null;
         var folders = assets.GetProperty("packageFolders").EnumerateObject().Select(folder => folder.Name).ToArray();
         foreach (var library in assets.GetProperty("libraries").EnumerateObject().OrderBy(library => library.Name))
         {
@@ -246,15 +265,25 @@ internal sealed class OutcomeCache
                     var reference = Path.GetFullPath(relative, projectDirectory);
                     if (!Workspace.Contains(baselineRoot, reference) || !File.Exists(reference))
                         throw new IOException("Project reference is outside the baseline workspace.");
-                    foundProduction |= reference.Equals(baselineProduction,
-                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+                    if (reference.Equals(baselineProduction,
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                        productionLibrary = library.Name;
                     break;
                 default:
                     throw new IOException("Untracked library in the restore graph.");
             }
         }
-        if (!foundProduction)
-            throw new IOException("The test restore graph does not reference the production project.");
+        if (productionLibrary is null || !assets.GetProperty("targets").EnumerateObject().All(target =>
+            target.Value.TryGetProperty(productionLibrary, out var production) &&
+            production.TryGetProperty("compile", out var compile) && compile.EnumerateObject().Any() &&
+            production.TryGetProperty("runtime", out var runtime) && runtime.EnumerateObject().Any()))
+            throw new IOException("The production project is not attributable in the test restore graph.");
+    }
+
+    private static byte[] FileDigest(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return SHA256.HashData(stream);
     }
 
     private static bool IsReusable(Outcome outcome) => outcome is Outcome.Passed or Outcome.TestFailed;

@@ -55,6 +55,23 @@ jobs:
           python3 -B benchmarks/run.py compare "$WORKLOAD" --scenario incremental "${patch[@]}" \
             --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
             --output "$RUNNER_TEMP/result" --timeout 300
+          python3 - "$RUNNER_TEMP/result/pair-01/pair.json" "$SCENARIO" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1]) as stream:
+              pair = json.load(stream)
+          for tool in ("stryker", "rmut"):
+              diff = pair[tool]["seed_differential"]
+              if sys.argv[2] == "test-only":
+                  [changed] = diff["outcome_mismatches"]
+                  assert (changed["stryker"]["outcome"], changed["rmut"]["outcome"]) == ("survived", "killed"), diff
+                  assert not diff["stryker_only"] and not diff["rmut_only"], diff
+              elif sys.argv[2] == "production":
+                  assert len(diff["stryker_only"]) == len(diff["rmut_only"]) == 1, diff
+              else:
+                  assert not any(diff.values()), diff
+          PY
       - name: Compare mutant reports
         if: ${{ !matrix.scenario }}
         run: |
