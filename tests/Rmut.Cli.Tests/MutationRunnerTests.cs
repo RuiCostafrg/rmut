@@ -34,6 +34,47 @@ public sealed class MutationRunnerTests
         fixture.AssertInputsUnchanged();
     }
 
+    [Fact]
+    public async Task OutcomeReuseRequiresCompleteInputsAndAnIntactCache()
+    {
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """);
+        using var files = new TemporaryDirectory();
+        var cache = Path.Combine(files.Directory.FullName, "outcomes.bin");
+        var manifest = Path.Combine(files.Directory.FullName, "inputs.json");
+        var dependency = Path.Combine(files.Directory.FullName, "data.txt");
+        File.WriteAllText(dependency, "first");
+        File.WriteAllText(manifest, """{"complete":true,"externalInputs":["data.txt"]}""");
+        var options = new OutcomeCacheOptions(cache, manifest);
+        var log = new List<string>();
+        var seed = await fixture.RunNativeAsync(log: log.Add, outcomeCache: options);
+        var mutant = Assert.Single(seed.Mutants);
+        Assert.Equal(Outcome.Killed, mutant.Outcome);
+        Assert.DoesNotContain($"Reused outcome {mutant.Id}", log);
+
+        async Task CheckAsync(bool expectedHit)
+        {
+            log.Clear();
+            var run = await fixture.RunNativeAsync(log: log.Add, outcomeCache: options);
+            Assert.Equal(Outcome.Passed, run.Baseline.Outcome);
+            Assert.Equal(Identity(mutant), Identity(Assert.Single(run.Mutants)));
+            Assert.Equal(expectedHit, log.Contains($"Reused outcome {mutant.Id}"));
+        }
+
+        await CheckAsync(expectedHit: true);
+        File.WriteAllBytes(cache, File.ReadAllBytes(cache)[..40]);
+        await CheckAsync(expectedHit: false);
+        await CheckAsync(expectedHit: true);
+        File.WriteAllText(dependency, "second");
+        await CheckAsync(expectedHit: false);
+        File.Delete(dependency);
+        await CheckAsync(expectedHit: false);
+    }
+
     [Theory]
     [InlineData(null, true)]
     [InlineData("bin/Debug/net10.0/Calculator.Tests.dll", true)]
@@ -275,8 +316,10 @@ public sealed class MutationRunnerTests
             new ManagedReferenceRunner(options, timeout ?? TimeSpan.FromMinutes(2), _ => { }).RunAsync(cancellation);
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
-            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null) =>
-            NativeRunner.RunAsync(options with { Switched = switched, SwitchedTestAssembly = switchedTestAssembly },
+            bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null,
+            OutcomeCacheOptions? outcomeCache = null) =>
+            NativeRunner.RunAsync(options with
+                { Switched = switched, SwitchedTestAssembly = switchedTestAssembly, OutcomeCache = outcomeCache },
                 timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);
 

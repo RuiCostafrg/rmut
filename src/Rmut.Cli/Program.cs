@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Rmut.Cli;
 
-const string usage = "Usage: rmut run --project PATH --test-project PATH [--json PATH] [--execution fresh|switched] [--switched-test-assembly RELATIVE_DLL]";
+const string usage = "Usage: rmut run --project PATH --test-project PATH [--json PATH] [--execution fresh|switched] [--switched-test-assembly RELATIVE_DLL] [--outcome-cache PATH --cache-inputs PATH]";
 if (args is ["--help"] or ["-h"] or ["run", "--help"])
 {
     Console.WriteLine(usage);

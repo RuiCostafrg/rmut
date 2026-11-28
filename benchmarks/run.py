@@ -136,15 +136,15 @@ def extract_source(spec, workspace, checkout):
                 raise ValueError(f"Unable to extract pinned revision {spec['revision']}")
 
 
-def tool_command(tool, args, spec, workspace, directory, *, seed=False):
-    run_dir = workspace.parent
+def tool_command(tool, args, spec, workspace, directory, *, seed=False, fresh=False):
+    run_dir = directory if fresh else workspace.parent
     if tool == "rmut":
         report = directory / "rmut.json"
         command = [str(args.rmut), "run", "--project", spec["project"],
                    "--test-project", spec["test_project"], "--json", str(report)]
         command.extend(
             arg.replace("{workspace}", str(workspace)).replace("{run_dir}", str(run_dir))
-            for arg in spec.get("rmut_seed_args" if seed else "rmut_args", [])
+            for arg in spec.get("rmut_seed_args" if seed else "rmut_args", []) if not fresh
         )
         return command, workspace, report
 
@@ -161,7 +161,8 @@ def tool_command(tool, args, spec, workspace, directory, *, seed=False):
     }
     if spec.get("shared_operators"):
         config["ignore-mutations"] = [*IGNORED_MUTATORS, *spec.get("additional_ignored_mutators", [])]
-    config.update(spec.get("stryker_seed_config" if seed else "stryker_config", {}))
+    if not fresh:
+        config.update(spec.get("stryker_seed_config" if seed else "stryker_config", {}))
     config_file = directory / "stryker-config.json"
     write_json(config_file, {"stryker-config": config})
     return (
@@ -191,26 +192,45 @@ def run_tool(tool, args, spec, run_dir):
             result["seed"] = seed[0]
             if seed[0].get("error") or not seed[1] or differential(seed[1], seed[1])["unfinished"]:
                 raise ValueError("Incremental seed did not produce a completed mutation report")
-            if "incremental_patch" in spec:
+            patch = args.incremental_patch
+            if patch is None and "incremental_patch" in spec:
                 patch = args.manifest.resolve().parent / spec["incremental_patch"]
+            if patch is not None:
                 subprocess.run(["git", "apply", str(patch)], cwd=workspace, check=True)
         sample, records = invoke(tool, args, spec, workspace, run_dir)
         result.update(sample)
+        if args.scenario == "incremental":
+            fresh_dir = run_dir / "fresh"
+            fresh_dir.mkdir()
+            # Recreate the source to exclude build outputs from either incremental stage.
+            fresh_workspace = fresh_dir / "source"
+            shutil.copytree(args.output / "input", fresh_workspace, symlinks=True)
+            if patch is not None:
+                subprocess.run(["git", "apply", str(patch)], cwd=fresh_workspace, check=True)
+            fresh_sample, fresh_records = invoke(tool, args, spec, fresh_workspace, fresh_dir, fresh=True)
+            result["fresh"] = fresh_sample
+            result["fresh_differential"] = differential(fresh_records, records)
+            if fresh_sample.get("error") or any(result["fresh_differential"].values()):
+                raise ValueError("Incremental mutation outcomes differ from fresh execution")
+            if tool == "rmut" and spec.get("verify_outcome_reuse"):
+                expected = 0 if patch is not None else len(records)
+                if seed[0]["reused_outcomes"] != 0 or sample["reused_outcomes"] != expected:
+                    raise ValueError(f"Expected {expected} Rmut cache hits after an independent seed")
     except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.SubprocessError) as error:
         result["error"] = str(error)
     write_json(run_dir / "result.json", result)
     return result, records
 
 
-def invoke(tool, args, spec, workspace, directory, *, seed=False):
-    command, cwd, report = tool_command(tool, args, spec, workspace, directory, seed=seed)
+def invoke(tool, args, spec, workspace, directory, *, seed=False, fresh=False):
+    command, cwd, report = tool_command(tool, args, spec, workspace, directory, seed=seed, fresh=fresh)
     result = {"command": command, "cwd": str(cwd)}
     records = {}
     try:
         result.update(execute(command, cwd, directory / "tool.log", args.timeout,
                               args.cgroup if args.measure and not seed else None))
         if tool == "stryker":
-            report = workspace.parent / "reports" / "mutation-report.json"
+            report = (directory if fresh else workspace.parent) / "reports" / "mutation-report.json"
             if not report.is_file():
                 raise ValueError("Stryker did not write a JSON report")
             if seed:
@@ -220,7 +240,13 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
         else:
             data = json.loads(report.read_text())
             records = rmut_records(data, workspace)
-            if spec.get("require_switched") and not seed:
+            if args.scenario == "incremental":
+                hits = re.findall(r"^Reused outcome ([a-fA-F0-9]{64})$",
+                                  (directory / "tool.log").read_text(), re.M)
+                if len(set(hits)) != len(hits) or set(hits) - {mutant["id"] for mutant in data["mutants"]}:
+                    raise ValueError("Invalid Rmut cache-hit identities")
+                result["reused_outcomes"] = len(hits)
+            if spec.get("require_switched") and not seed and not fresh:
                 switched_ids = re.findall(r"^Switched execution ([a-fA-F0-9]{64})$",
                                           (directory / "tool.log").read_text(), re.M)
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]
@@ -299,6 +325,7 @@ def main():
     parser.add_argument("--cgroup", type=Path)
     parser.add_argument("--checkout", type=Path)
     parser.add_argument("--scenario", choices=["clean", "incremental"], default="clean")
+    parser.add_argument("--incremental-patch", type=Path)
     parser.add_argument("--pairs", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=900)
@@ -324,6 +351,12 @@ def main():
         parser.error("--output must be outside the fixture source")
     if "source" not in spec and args.checkout is None:
         parser.error(f"Provide --checkout containing the frozen revision {spec['revision']}")
+    if args.incremental_patch is not None:
+        if args.scenario != "incremental":
+            parser.error("--incremental-patch requires --scenario incremental")
+        args.incremental_patch = args.incremental_patch.resolve(strict=True)
+    if spec.get("verify_outcome_reuse") and args.scenario != "incremental":
+        parser.error("This workload requires --scenario incremental")
     if args.scenario == "incremental":
         if args.measure:
             parser.error("incremental measurement requires verified Rmut cache reuse")
@@ -347,6 +380,8 @@ def main():
     write_json(args.output / "environment.json", {
         "workload": args.workload, "spec": spec, "scenario": args.scenario,
         "source_sha256": source_hash(args.output / "input"),
+        "incremental_patch_sha256": hashlib.sha256(args.incremental_patch.read_bytes()).hexdigest()
+        if args.incremental_patch is not None else None,
         "stryker_tool": version.strip(), "rmut_tool": rmut_version.strip(),
         "dotnet": subprocess.check_output(["dotnet", "--info"], env=ENV, text=True, timeout=30),
         "host": list(os.uname()), "affinity": sorted(os.sched_getaffinity(0)),

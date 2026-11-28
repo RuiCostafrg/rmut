@@ -28,7 +28,7 @@ internal static class NativeRunner
     private sealed record Sources : Request;
     private sealed record Prepare(InstrumentedFile[] Files) : Request;
     private sealed record EvaluateSwitched(string Id) : Request;
-    private sealed record Evaluate(int Index, string MutatedSource) : Request;
+    private sealed record Evaluate(string Id, int Index, string MutatedSource) : Request;
     private sealed record Log(string Text) : Request;
     private sealed record Finish(RunReport Report) : Request;
 
@@ -53,7 +53,16 @@ internal static class NativeRunner
             if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
-            return await RunEngineAsync(binary, session, log, cancellation);
+            var report = await RunEngineAsync(binary, session, log, cancellation);
+            if (session.ReusedOutcomesStillValid(cancellation))
+            {
+                session.Save(report, cancellation);
+                return report;
+            }
+
+            log("Outcome inputs changed during execution. Retrying with fresh execution.");
+            using var retry = new EvaluationSession(options with { OutcomeCache = null }, timeout, cancellation);
+            return await RunEngineAsync(binary, retry, log, cancellation);
         }
         finally
         {
@@ -104,10 +113,21 @@ internal static class NativeRunner
                             log($"Switched execution {evaluation.Id}");
                         await ReplyAsync(switched);
                         break;
-                    case Evaluate evaluation when (uint)evaluation.Index < (uint)sourceCount &&
+                    case Evaluate evaluation when evaluation.Id is { Length: 64 } &&
+                        (uint)evaluation.Index < (uint)sourceCount &&
                         evaluation.MutatedSource is not null:
-                        await ReplyAsync(await session.EvaluateMutantAsync(
-                            evaluation.Index, evaluation.MutatedSource, cancellation));
+                        var key = evaluation.Id;
+                        if (session.TryReuse(key, out var reused))
+                        {
+                            log($"Reused outcome {evaluation.Id}");
+                            session.Remember(key, reused);
+                            await ReplyAsync(reused);
+                            break;
+                        }
+                        var result = await session.EvaluateMutantAsync(
+                            evaluation.Index, evaluation.MutatedSource, cancellation);
+                        session.Remember(key, result);
+                        await ReplyAsync(result);
                         break;
                     case Log message when message.Text is not null:
                         log(message.Text);

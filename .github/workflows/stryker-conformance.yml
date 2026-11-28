@@ -19,8 +19,16 @@ jobs:
       fail-fast: false
       matrix:
         workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, operator-exclusion-gap]
+        include:
+          - workload: incremental-operators
+            scenario: unchanged
+          - workload: incremental-operators
+            scenario: test-only
+          - workload: incremental-operators
+            scenario: production
     env:
       WORKLOAD: ${{ matrix.workload }}
+      SCENARIO: ${{ matrix.scenario }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -37,7 +45,18 @@ jobs:
             --output "$RUNNER_TEMP/feed"
           dotnet tool install Rmut --version 0.0.1-conformance --tool-path "$RUNNER_TEMP/rmut" \
             --add-source "$RUNNER_TEMP/feed"
+      - name: Compare incremental and fresh mutant reports
+        if: matrix.scenario
+        run: |
+          patch=()
+          if [[ "$SCENARIO" != unchanged ]]; then
+            patch=(--incremental-patch "benchmarks/incremental/$SCENARIO.patch")
+          fi
+          python3 -B benchmarks/run.py compare "$WORKLOAD" --scenario incremental "${patch[@]}" \
+            --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
+            --output "$RUNNER_TEMP/result" --timeout 300
       - name: Compare mutant reports
+        if: ${{ !matrix.scenario }}
         run: |
           results="$RUNNER_TEMP/result"
           status=0
@@ -76,11 +95,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: conformance-${{ matrix.workload }}
+          name: conformance-${{ matrix.workload }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }}
           path: |
             ${{ runner.temp }}/result/*.json
             ${{ runner.temp }}/result/pair-*/pair.json
             ${{ runner.temp }}/result/pair-*/*/*.log
             ${{ runner.temp }}/result/pair-*/*/*.json
             ${{ runner.temp }}/result/pair-*/stryker/reports/*.json
+            ${{ runner.temp }}/result/pair-*/*/seed/*.json
+            ${{ runner.temp }}/result/pair-*/*/seed/*.log
+            ${{ runner.temp }}/result/pair-*/*/fresh/*.json
+            ${{ runner.temp }}/result/pair-*/*/fresh/*.log
+            ${{ runner.temp }}/result/pair-*/stryker/fresh/reports/*.json
           if-no-files-found: ignore
