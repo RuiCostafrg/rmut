@@ -376,10 +376,6 @@ internal sealed class EvaluationSession : IAsyncDisposable
             ["MSBUILDUSESERVER"] = "0",
             ["MSBUILDDISABLENODEREUSE"] = "1"
         };
-        if (environment is not null &&
-            Environment.GetEnvironmentVariable("DOTNET_GCConserveMemory") is null &&
-            Environment.GetEnvironmentVariable("COMPlus_GCConserveMemory") is null)
-            environment["DOTNET_GCConserveMemory"] = "7";
         var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation,
             environment, arguments);
         if (build.TimedOut)
