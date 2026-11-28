@@ -6,18 +6,19 @@ on:
       workload:
         description: Matched workload
         type: choice
-        options: [switched-operators, switched-assembly, coverage-all]
+        options: [switched-operators, switched-assembly, coverage-all, coverage-per-test]
         default: switched-operators
       profile:
         description: Collect a separate switched process-tree diagnostic
         type: boolean
         default: false
   pull_request:
-    branches: [perf/reduce-switched-cost]
+    branches: [perf/reduce-switched-cost, feat/coverage-guided-mutation]
     paths:
       - '.github/workflows/paired-benchmark.yml'
       - 'benchmarks/**'
       - 'fixtures/Conformance/**'
+      - 'fixtures/PerTest/**'
       - 'src/**'
   push:
     branches: [perf/m2-paired-baseline]
@@ -57,7 +58,7 @@ jobs:
             --add-source "$RUNNER_TEMP/feed"
       - name: Run paired benchmark
         env:
-          WORKLOAD: ${{ inputs.workload || (github.event_name == 'pull_request' && 'coverage-all') || 'switched-operators' }}
+          WORKLOAD: ${{ inputs.workload || (github.base_ref == 'feat/coverage-guided-mutation' && 'coverage-per-test') || (github.event_name == 'pull_request' && 'coverage-all') || 'switched-operators' }}
         run: |
           parent="/sys/fs/cgroup/rmut-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           report="$RUNNER_TEMP/benchmark-evidence"
@@ -84,7 +85,7 @@ jobs:
               --cgroup "$parent" --pairs 5 --warmups 1 --timeout 300 --output "$report/results"
           )
       - name: Profile switched process tree
-        if: ${{ !cancelled() && inputs.profile && inputs.workload != 'coverage-all' }}
+        if: ${{ !cancelled() && inputs.profile && startsWith(inputs.workload, 'switched-') }}
         env:
           WORKLOAD: ${{ inputs.workload }}
         run: |

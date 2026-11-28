@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, coverage-all, operator-exclusion-gap]
+        workload: [shared-operators, switched-assembly, relational-gap, no-coverage-gap, coverage-all, coverage-per-test, coverage-per-test-static, operator-exclusion-gap]
     env:
       WORKLOAD: ${{ matrix.workload }}
     steps:
@@ -66,6 +66,16 @@ jobs:
               assert sorted(row["outcome"] for row in pair["rmut"]["mutants"]) == [
                   "killed", "killed", "killed", "killed", "noCoverage",
               ], pair["rmut"]["mutants"]
+          elif workload == "coverage-per-test":
+              assert status == "0" and pair["equivalent"], diff
+              assert pair["rmut"]["selected_counts"] == [1, 2], pair["rmut"]
+              assert sorted(row["outcome"] for row in pair["rmut"]["mutants"]) == [
+                  "killed", "killed", "noCoverage",
+              ], pair["rmut"]["mutants"]
+          elif workload == "coverage-per-test-static":
+              assert status == "0" and pair["equivalent"], diff
+              assert pair["rmut"]["selected_counts"] == [], pair["rmut"]
+              assert [row["outcome"] for row in pair["rmut"]["mutants"]] == ["killed"], pair["rmut"]
           elif workload == "relational-gap":
               assert status == "1" and not pair["equivalent"], diff
               assert len(diff["stryker_only"]) == 1 and diff["stryker_only"][0][2:] == [">", "<"], diff

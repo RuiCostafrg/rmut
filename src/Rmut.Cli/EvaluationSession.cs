@@ -6,8 +6,9 @@ using System.Xml.Linq;
 namespace Rmut.Cli;
 
 internal sealed record SourceFile(string Path, string Content);
-internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector, string? CoveragePath);
+internal sealed record SourceList(RunResult Result, IReadOnlyList<SourceFile> Paths, string? Selector, string? CoveragePath, string? CoverageScope);
 internal sealed record InstrumentedFile(int Index, string Content);
+internal sealed record ExecutedTest(Guid Id, string? FilterName);
 internal sealed record SwitchedPreparation(bool Ready, IReadOnlyList<string>? Hits = null);
 
 internal sealed class EvaluationSession : IDisposable
@@ -21,7 +22,9 @@ internal sealed class EvaluationSession : IDisposable
     private readonly List<string> originals = [];
     private readonly string? selector;
     private readonly string? coveragePath;
-    private readonly List<Guid> baselineTests = [];
+    private readonly List<ExecutedTest> baselineTests = [];
+    private readonly string? coverageScope;
+    private Dictionary<string, IReadOnlyList<ExecutedTest>>? coveringTests;
     private Workspace? switchedWorkspace;
 
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
@@ -39,7 +42,8 @@ internal sealed class EvaluationSession : IDisposable
         baselineWorkspace = new Workspace(root, cancellation);
         this.timeout = timeout;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
-        coveragePath = options.Coverage ? Path.Combine(baselineWorkspace.Root, $".rmut-coverage-{Guid.NewGuid():N}") : null;
+        coverageScope = options.Coverage == CoverageMode.PerTest ? $"{selector}_COVERAGE" : null;
+        coveragePath = options.Coverage != CoverageMode.Off ? Path.Combine(baselineWorkspace.Root, $".rmut-coverage-{Guid.NewGuid():N}") : null;
     }
 
     public Task<RunResult> BaselineAsync(CancellationToken cancellation) =>
@@ -65,7 +69,7 @@ internal sealed class EvaluationSession : IDisposable
             files.Add(new SourceFile(displayPath, content));
         }
 
-        return new SourceList(result, files, selector, coveragePath);
+        return new SourceList(result, files, selector, coveragePath, coverageScope);
     }
 
     public async Task<RunResult> EvaluateMutantAsync(int index, string mutatedSource, CancellationToken cancellation)
@@ -113,17 +117,21 @@ internal sealed class EvaluationSession : IDisposable
             using var control = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
             IReadOnlyList<string>? hits = null;
             if (collectCoverage && coveragePath is not null && baselineTests.Count > 0)
-                hits = await CollectCoverageAsync(template, control, coveragePath, cancellation);
+            {
+                hits = await CollectCoverageAsync(template, control, coveragePath, baselineTests, cancellation);
+                if (hits is not null && coverageScope is not null)
+                    coveringTests = await AttributeCoverageAsync(template, coveragePath, hits, cancellation);
+            }
             if (hits is null)
             {
                 // A failed collection control may have changed files in its private copy.
                 using var fallback = collectCoverage
                     ? new Workspace(template.Root, cancellation, includeBuildOutputs: true)
                     : null;
-                var tests = baselineTests.Count > 0 ? new List<Guid>() : null;
+                var tests = baselineTests.Count > 0 ? new List<ExecutedTest>() : null;
                 KeyValuePair<string, string>? disableProbes = collectCoverage ? new(selector, "off") : null;
                 var result = await TestSwitchedAsync(template, fallback ?? control, cancellation, disableProbes, tests);
-                if (result.Outcome != Outcome.Passed || (tests is not null && !SameBaselineTests(tests)))
+                if (result.Outcome != Outcome.Passed || (tests is not null && !SameTests(tests, baselineTests)))
                     return new SwitchedPreparation(false);
             }
 
@@ -142,19 +150,21 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<IReadOnlyList<string>?> CollectCoverageAsync(Workspace template, Workspace control,
-        string markerPath, CancellationToken cancellation)
+        string markerPath, IReadOnlyList<ExecutedTest> expected, CancellationToken cancellation, string? filter = null)
     {
         try
         {
             var markers = Directory.CreateDirectory(markerPath);
-            var tests = new List<Guid>();
-            var result = await TestSwitchedAsync(template, control, cancellation, passingTests: tests);
-            if (result.Outcome != Outcome.Passed || !SameBaselineTests(tests))
+            var tests = new List<ExecutedTest>();
+            KeyValuePair<string, string>? capture = filter is null || coverageScope is null ? null : new(coverageScope, markerPath);
+            var result = await TestSwitchedAsync(template, control, cancellation, capture, tests, filter);
+            if (result.Outcome != Outcome.Passed || !SameTests(tests, expected))
                 return null;
 
             var hits = markers.EnumerateFileSystemInfos().ToArray();
-            return hits.Length > 0 && hits.All(hit => hit is DirectoryInfo &&
-                (hit.Attributes & FileAttributes.ReparsePoint) == 0 && hit.Name != "probe-error")
+            return hits.All(hit => hit is DirectoryInfo &&
+                (hit.Attributes & FileAttributes.ReparsePoint) == 0 && hit.Name != "probe-error" &&
+                hit.Name.Length == 64 && hit.Name.All(char.IsAsciiHexDigitUpper))
                 ? hits.Select(hit => hit.Name).ToArray()
                 : null;
         }
@@ -164,18 +174,67 @@ internal sealed class EvaluationSession : IDisposable
         }
     }
 
-    private bool SameBaselineTests(List<Guid> tests) =>
-        tests.Count == baselineTests.Count && tests.ToHashSet().SetEquals(baselineTests);
+    private async Task<Dictionary<string, IReadOnlyList<ExecutedTest>>?> AttributeCoverageAsync(
+        Workspace template, string markerPath, IReadOnlyList<string> suiteHits, CancellationToken cancellation)
+    {
+        if (suiteHits.Count == 0 || baselineTests.Count < 2 ||
+            baselineTests.Any(test => test.FilterName is null) ||
+            baselineTests.Select(test => test.FilterName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != baselineTests.Count)
+            return null;
 
-    public async Task<RunResult?> EvaluateSwitchedAsync(string id, CancellationToken cancellation)
+        var hitsByTest = new Dictionary<string, List<ExecutedTest>>(StringComparer.Ordinal);
+        Directory.Move(markerPath, $"{markerPath}-suite");
+        Directory.CreateDirectory(markerPath);
+        foreach (var test in baselineTests)
+        {
+            using var control = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
+            var isolatedPath = $"{markerPath}-{Guid.NewGuid():N}";
+            var hits = await CollectCoverageAsync(template, control, isolatedPath, [test], cancellation, TestFilter([test]));
+            if (hits is null)
+                return null;
+            foreach (var hit in hits)
+            {
+                if (!hitsByTest.TryGetValue(hit, out var covering))
+                    hitsByTest.Add(hit, covering = []);
+                covering.Add(test);
+            }
+        }
+
+        return !Directory.EnumerateFileSystemEntries(markerPath).Any() &&
+            hitsByTest.Keys.ToHashSet().SetEquals(suiteHits)
+            ? hitsByTest.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<ExecutedTest>)pair.Value)
+            : null;
+    }
+
+    private static bool SameTests(IReadOnlyList<ExecutedTest> observed, IReadOnlyList<ExecutedTest> expected) =>
+        observed.Count == expected.Count && observed.ToHashSet().SetEquals(expected);
+
+    private static string TestFilter(IEnumerable<ExecutedTest> tests) =>
+        string.Join('|', tests.Select(test => $"FullyQualifiedName={test.FilterName}"));
+
+    public async Task<RunResult?> EvaluateSwitchedAsync(string id, Action<string> log, CancellationToken cancellation)
     {
         if (switchedWorkspace is not { } template || selector is null)
             return null;
 
         try
         {
+            var selection = new KeyValuePair<string, string>(selector, id);
+            if (coveringTests?.GetValueOrDefault(id) is { } covered && covered.Count < baselineTests.Count)
+            {
+                using var filteredWorkspace = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
+                var executed = new List<ExecutedTest>();
+                var filtered = await TestSwitchedAsync(template, filteredWorkspace, cancellation, selection,
+                    executed, TestFilter(covered));
+                if (filtered.Outcome is (Outcome.Passed or Outcome.TestFailed) && SameTests(executed, covered))
+                {
+                    log($"Selected {covered.Count} of {baselineTests.Count} tests for {id}");
+                    return filtered;
+                }
+            }
+
             using var workspace = new Workspace(template.Root, cancellation, includeBuildOutputs: true);
-            var result = await TestSwitchedAsync(template, workspace, cancellation, new(selector, id));
+            var result = await TestSwitchedAsync(template, workspace, cancellation, selection);
             return result.Outcome is Outcome.Passed or Outcome.TestFailed ? result : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
@@ -226,10 +285,10 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private async Task<RunResult> EvaluateAsync(string testProject, CancellationToken cancellation,
-        List<Guid>? passingTests = null)
+        List<ExecutedTest>? executedTests = null)
     {
         var build = await BuildAsync(testProject, cancellation);
-        return build.Outcome == Outcome.Passed ? await TestAsync(testProject, cancellation, passingTests: passingTests) : build;
+        return build.Outcome == Outcome.Passed ? await TestAsync(testProject, cancellation, executedTests: executedTests) : build;
     }
 
     private async Task<RunResult> BuildAsync(string testProject, CancellationToken cancellation,
@@ -245,18 +304,18 @@ internal sealed class EvaluationSession : IDisposable
     }
 
     private Task<RunResult> TestSwitchedAsync(Workspace template, Workspace workspace,
-        CancellationToken cancellation, KeyValuePair<string, string>? selection = null, List<Guid>? passingTests = null)
+        CancellationToken cancellation, KeyValuePair<string, string>? selection = null, List<ExecutedTest>? executedTests = null, string? filter = null)
     {
         var privateProject = workspace.Map(template.Map(testProject));
         var privateAssembly = switchedTestAssembly is null ? null : workspace.Map(template.Map(switchedTestAssembly));
         if (privateAssembly is not null && !File.Exists(privateAssembly))
             return Task.FromResult(new RunResult(Outcome.RunnerError, "Switched test assembly is missing from the build copy."));
 
-        return TestAsync(privateProject, cancellation, selection, privateAssembly, passingTests);
+        return TestAsync(privateProject, cancellation, selection, privateAssembly, executedTests, filter);
     }
 
     private async Task<RunResult> TestAsync(string testProject, CancellationToken cancellation,
-        KeyValuePair<string, string>? selection = null, string? assembly = null, List<Guid>? passingTests = null)
+        KeyValuePair<string, string>? selection = null, string? assembly = null, List<ExecutedTest>? executedTests = null, string? filter = null)
     {
         var directory = Path.GetDirectoryName(testProject)!;
         var results = Path.Combine(directory, "TestResults", Guid.NewGuid().ToString("N"));
@@ -266,6 +325,8 @@ internal sealed class EvaluationSession : IDisposable
             : ["test", assembly, "--logger", "trx;LogFilePrefix=rm", "--results-directory", results];
         if (selection is { } selector)
             arguments = [.. arguments, "--environment", $"{selector.Key}={selector.Value}"];
+        if (filter is not null)
+            arguments = [.. arguments, "--filter", filter];
         var test = await DotnetProcess.RunAsync(directory, timeout, cancellation, arguments);
         if (test.TimedOut)
             return new RunResult(Outcome.TimedOut, "Tests timed out.");
@@ -277,7 +338,7 @@ internal sealed class EvaluationSession : IDisposable
 
             var total = 0;
             var failed = 0;
-            var testIds = passingTests is null ? null : new HashSet<Guid>();
+            var observedTests = executedTests is null ? null : new HashSet<ExecutedTest>();
             var complete = true;
             foreach (var path in Directory.EnumerateFiles(results, "*.trx"))
             {
@@ -296,12 +357,12 @@ internal sealed class EvaluationSession : IDisposable
                 var executed = (int)counters.Attribute("executed")!;
                 total += executed;
                 failed += (int)counters.Attribute("failed")!;
-                if (testIds is not null)
-                    complete &= ReadPassingTests(run!, executed, testIds);
+                if (observedTests is not null)
+                    complete &= ReadExecutedTests(run!, executed, observedTests);
             }
 
-            if (testIds is not null && complete && testIds.Count == total && test.ExitCode == 0 && failed == 0)
-                passingTests!.AddRange(testIds);
+            if (observedTests is not null && complete && observedTests.Count == total)
+                executedTests!.AddRange(observedTests);
 
             return (test.ExitCode, total, failed) switch
             {
@@ -316,13 +377,38 @@ internal sealed class EvaluationSession : IDisposable
         }
     }
 
-    private static bool ReadPassingTests(XElement run, int executed, HashSet<Guid> testIds)
+    private bool ReadExecutedTests(XElement run, int executed, HashSet<ExecutedTest> tests)
     {
         var ns = run.Name.Namespace;
         var results = run.Element(ns + "Results")?.Elements().ToArray() ?? [];
-        return results.Length == executed && results.All(result =>
-            result.Name == ns + "UnitTestResult" && (string?)result.Attribute("outcome") == "Passed" &&
-            Guid.TryParse((string?)result.Attribute("testId"), out var id) && id != Guid.Empty && testIds.Add(id));
+        if (results.Length != executed)
+            return false;
+
+        var definitions = run.Element(ns + "TestDefinitions")?.Elements().ToLookup(
+            definition => (string?)definition.Attribute("id"));
+        foreach (var result in results)
+        {
+            var rawId = (string?)result.Attribute("testId");
+            if (result.Name != ns + "UnitTestResult" ||
+                (string?)result.Attribute("outcome") is not ("Passed" or "Failed") ||
+                !Guid.TryParse(rawId, out var id) || id == Guid.Empty)
+                return false;
+
+            string? filterName = null;
+            if (coverageScope is not null && definitions?[rawId].ToArray() is [var definition] &&
+                definition.Element(ns + "TestMethod") is { } method &&
+                ((string?)method.Attribute("adapterTypeName"))?.StartsWith("executor://xunit/",
+                    StringComparison.OrdinalIgnoreCase) == true)
+            {
+                var name = $"{(string?)method.Attribute("className")}.{(string?)method.Attribute("name")}";
+                if (name == (string?)result.Attribute("testName") &&
+                    name.Split('.').All(part => part.Length > 0 && part.All(c => char.IsAsciiLetterOrDigit(c) || c == '_')))
+                    filterName = name;
+            }
+            if (!tests.Add(new ExecutedTest(id, filterName)))
+                return false;
+        }
+        return true;
     }
 
     private static bool IsInfrastructureError(XElement element)
