@@ -23,6 +23,7 @@ internal sealed class EvaluationSession : IAsyncDisposable
     private readonly TimeSpan timeout;
     private readonly bool reuseBaselineBuild;
     private readonly bool useCompilerServer;
+    private readonly BaselineBuildMode baselineBuild;
     private CompilerServer? compilerServer;
     private Workspace? baselineBuildSnapshot;
     private readonly List<string> originals = [];
@@ -50,6 +51,7 @@ internal sealed class EvaluationSession : IAsyncDisposable
         this.timeout = timeout;
         reuseBaselineBuild = options.ReuseBaselineBuild;
         useCompilerServer = options.UseCompilerServer;
+        baselineBuild = options.BaselineBuild;
         SwitchedWorkers = options.SwitchedWorkers;
         selector = options.Switched ? $"RMUT_MUTANT_{Guid.NewGuid():N}" : null;
     }
@@ -60,7 +62,8 @@ internal sealed class EvaluationSession : IAsyncDisposable
         if (useCompilerServer && !HasWorkspaceSdkOverride(privateProject, baselineWorkspace.Root))
             compilerServer = await CompilerServer.TryCreateAsync(Path.GetDirectoryName(privateProject)!,
                 timeout, cancellation);
-        var build = await BuildAsync(privateProject, cancellation, server: compilerServer);
+        var build = await BuildAsync(privateProject, cancellation, server: compilerServer,
+            mode: compilerServer is null ? BaselineBuildMode.Default : baselineBuild);
         if (build.Outcome != Outcome.Passed && compilerServer is not null)
         {
             await StopCompilerServerAsync();
@@ -361,23 +364,36 @@ internal sealed class EvaluationSession : IAsyncDisposable
     }
 
     private async Task<RunResult> BuildAsync(string testProject, CancellationToken cancellation,
-        bool rejectFrameworkTypeConflicts = false, bool skipRestore = false, CompilerServer? server = null)
+        bool rejectFrameworkTypeConflicts = false, bool skipRestore = false, CompilerServer? server = null,
+        BaselineBuildMode mode = BaselineBuildMode.Default)
     {
         string[] arguments = server is null
             ? ["build", testProject, "--disable-build-servers", "--nologo"]
             : ["build", testProject, "--nologo", .. server.BuildArguments];
-        if (skipRestore)
-            arguments = [.. arguments, "--no-restore"];
-        if (rejectFrameworkTypeConflicts)
-            arguments = [.. arguments, "-warnaserror:CS0436"];
         var environment = server is null ? null : new Dictionary<string, string>
         {
             ["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0",
             ["MSBUILDUSESERVER"] = "0",
             ["MSBUILDDISABLENODEREUSE"] = "1"
         };
-        var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation,
-            environment, arguments);
+        var directory = Path.GetDirectoryName(testProject)!;
+        if (mode == BaselineBuildMode.SeparateRestore && server is not null)
+        {
+            var restore = await DotnetProcess.RunAsync(directory, timeout, cancellation, environment,
+                ["restore", testProject, "--nologo", .. server.BuildArguments]);
+            if (restore.TimedOut)
+                return new RunResult(Outcome.TimedOut, "Restore timed out.");
+            if (restore.ExitCode != 0)
+                return new RunResult(Outcome.BuildFailed, restore.Diagnostics);
+            skipRestore = true;
+        }
+        if (mode == BaselineBuildMode.SingleNode)
+            arguments = [.. arguments, "-maxcpucount:1"];
+        if (skipRestore)
+            arguments = [.. arguments, "--no-restore"];
+        if (rejectFrameworkTypeConflicts)
+            arguments = [.. arguments, "-warnaserror:CS0436"];
+        var build = await DotnetProcess.RunAsync(directory, timeout, cancellation, environment, arguments);
         if (build.TimedOut)
             return new RunResult(Outcome.TimedOut, "Build timed out.");
         return build.ExitCode == 0 ? new RunResult(Outcome.Passed) : new RunResult(Outcome.BuildFailed, build.Diagnostics);
