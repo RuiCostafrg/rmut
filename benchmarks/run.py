@@ -15,7 +15,7 @@ import sys
 import time
 import uuid
 
-from reports import differential, rmut_records, stryker_records
+from reports import differential, rmut_records, stryker_block_filter_audit, stryker_records
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -221,6 +221,8 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
                 report = report.rename(directory / "mutation-report.json")
             data = json.loads(report.read_text())
             records = stryker_records(data, workspace, spec["project"])
+            if args.workload == "smart-enum":
+                result["block_filter"] = stryker_block_filter_audit(data)
         else:
             data = json.loads(report.read_text())
             records = rmut_records(data, workspace)

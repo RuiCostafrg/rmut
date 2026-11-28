@@ -432,6 +432,124 @@ fn negatable_condition(mut node: Node<'_>) -> bool {
     )
 }
 
+// Stryker's LINQ mutator matches member names syntactically, including
+// properties and user-defined members. Compilation determines viability.
+fn linq_replacement(member: &str) -> Option<&'static str> {
+    Some(match member.trim_start_matches('@') {
+        "FirstOrDefault" | "Last" => "First",
+        "First" => "FirstOrDefault",
+        "Single" => "SingleOrDefault",
+        "SingleOrDefault" => "Single",
+        "All" => "Any",
+        "Any" => "All",
+        "Skip" => "Take",
+        "Take" => "Skip",
+        "SkipWhile" => "TakeWhile",
+        "TakeWhile" => "SkipWhile",
+        "Min" | "Sum" => "Max",
+        "Max" | "Average" => "Min",
+        "Count" => "Sum",
+        "OrderBy" => "OrderByDescending",
+        "OrderByDescending" => "OrderBy",
+        "ThenBy" => "ThenByDescending",
+        "ThenByDescending" => "ThenBy",
+        "Reverse" => "AsEnumerable",
+        "AsEnumerable" => "Reverse",
+        "Union" => "Intersect",
+        "Intersect" => "Union",
+        "Concat" => "Except",
+        "Except" => "Concat",
+        "MinBy" => "MaxBy",
+        "MaxBy" => "MinBy",
+        "SkipLast" => "TakeLast",
+        "TakeLast" => "SkipLast",
+        "Order" => "OrderDescending",
+        "OrderDescending" => "Order",
+        "UnionBy" => "IntersectBy",
+        "IntersectBy" => "UnionBy",
+        "Append" => "Prepend",
+        "Prepend" => "Append",
+        _ => return None,
+    })
+}
+
+fn linq_edit(node: Node<'_>, source: &str) -> Option<(Range<usize>, &'static str)> {
+    let name = node.child_by_field_name("name")?;
+    let identifier = if name.kind() == "generic_name" {
+        first_syntax_child(name)?
+    } else {
+        name
+    };
+    let replacement = linq_replacement(&source[identifier.byte_range()])?;
+    if matches!(
+        replacement,
+        "All"
+            | "SkipWhile"
+            | "TakeWhile"
+            | "OrderBy"
+            | "OrderByDescending"
+            | "ThenBy"
+            | "ThenByDescending"
+            | "Union"
+            | "Intersect"
+            | "SkipLast"
+            | "TakeLast"
+            | "MaxBy"
+            | "MinBy"
+            | "IntersectBy"
+            | "UnionBy"
+            | "Append"
+            | "Prepend"
+    ) && node.parent().is_some_and(|parent| {
+        matches!(
+            parent.kind(),
+            "member_access_expression" | "member_binding_expression"
+        )
+    }) && ancestors(node)
+        .find(|parent| {
+            !matches!(
+                parent.kind(),
+                "member_access_expression"
+                    | "member_binding_expression"
+                    | "conditional_access_expression"
+            )
+        })
+        .filter(|parent| parent.kind() == "invocation_expression")
+        .and_then(|invocation| invocation.child_by_field_name("arguments"))
+        .is_some_and(|arguments| first_syntax_child(arguments).is_none())
+    {
+        return None;
+    }
+    Some((name.byte_range(), replacement))
+}
+
+fn conditional_branches<'a>(node: Node<'_>, source: &'a str) -> Option<(&'a str, &'a str)> {
+    let condition = node.child_by_field_name("condition")?;
+    if contains_syntax(condition, &["declaration_pattern"]) {
+        return None;
+    }
+    let consequence = node.child_by_field_name("consequence")?;
+    let alternative = node.child_by_field_name("alternative")?;
+    let colon = node
+        .children(&mut node.walk())
+        .find(|child| child.kind() == ":")?;
+    // Preserve the consequence token's same-line trailing trivia, including
+    // a line break, and discard indentation attached to the original colon.
+    let trailing = &source[consequence.end_byte()..colon.start_byte()];
+    let trailing_end = trailing.find(['\n', '\r']).map_or(trailing.len(), |index| {
+        index
+            + if trailing[index..].starts_with("\r\n") {
+                2
+            } else {
+                1
+            }
+    });
+    Some((
+        &source[consequence.start_byte()..consequence.end_byte() + trailing_end],
+        &source[alternative.byte_range()],
+    ))
+}
+
 fn stryker_edits<'a>(node: Node<'_>, source: &'a str, edits: &mut Vec<Edit<'a>>) {
     let text = |node: Node<'_>| &source[node.byte_range()];
     let mut add = |range, replacement| {
@@ -446,6 +564,32 @@ fn stryker_edits<'a>(node: Node<'_>, source: &'a str, edits: &mut Vec<Edit<'a>>)
     }
 
     let replacement = match node.kind() {
+        "conditional_expression" => {
+            if let Some((consequence, alternative)) = conditional_branches(node, source) {
+                for value in ["true", "false"] {
+                    add(
+                        node.byte_range(),
+                        Cow::Owned(format!("({value}?{consequence}:{alternative})")),
+                    );
+                }
+            }
+            return;
+        }
+        "member_access_expression" | "member_binding_expression" => {
+            if let Some((range, replacement)) = linq_edit(node, source) {
+                add(range, Cow::Borrowed(replacement));
+            }
+            return;
+        }
+        "object_creation_expression" => {
+            if let Some(initializer) = node
+                .child_by_field_name("initializer")
+                .filter(|initializer| first_syntax_child(*initializer).is_some())
+            {
+                add(initializer.byte_range(), Cow::Borrowed("{}"));
+            }
+            return;
+        }
         "block" if removable_block(node, source) => "{}",
         "boolean_literal" => match text(node) {
             "true" => "false",
@@ -607,5 +751,29 @@ mod tests {
                 .iter()
                 .all(|text| { !parser.parse(text, None).unwrap().root_node().has_error() }));
         }
+    }
+    #[test]
+    fn profile_preserves_conditional_trivia_and_discovers_member_and_initializer_edits() {
+        let source =
+            "class C { object M(bool f, C values) => f ? new C { values }\n    : values.Any(); }";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .unwrap();
+        let discovery = discover(&mut parser, "C.cs", source, true).unwrap();
+        let edits: Vec<_> = discovery
+            .mutations
+            .iter()
+            .map(|mutation| mutation.replacement.as_ref())
+            .collect();
+        assert_eq!(
+            edits,
+            [
+                "(true?new C { values }\n:values.Any())",
+                "(false?new C { values }\n:values.Any())",
+                "{}",
+                "All",
+            ]
+        );
     }
 }

@@ -67,6 +67,46 @@ def relative_path(path, root, project):
     return (Path(project).parent / path).as_posix()
 
 
+BLOCK_FILTER_REASON = "Removed by block already covered filter"
+
+
+def located_mutants(source, mutants):
+    for mutant in mutants:
+        start = source_offset(source, mutant["location"]["start"])
+        end = source_offset(source, mutant["location"]["end"])
+        if end < start:
+            raise ValueError("Invalid Stryker source range")
+        yield start, end, mutant
+
+
+def stryker_block_filter_audit(report):
+    """Replay containment using Stryker's own post-instrumentation eligibility."""
+    audit = {"blocks": 0, "compile_errors": 0, "ignored": 0, "disagreements": []}
+    for path, file in report["files"].items():
+        rows = list(located_mutants(file.get("source", ""), file.get("mutants", [])))
+        # A block removed by this filter was still eligible when the filter ran.
+        eligible = [(start, end, mutant) for start, end, mutant in rows
+                    if mutant["status"] not in {"Ignored", "CompileError"}
+                    or mutant.get("statusReason") == BLOCK_FILTER_REASON]
+        for start, end, mutant in rows:
+            if mutant.get("mutatorName") != "Block removal mutation":
+                continue
+            audit["blocks"] += 1
+            if mutant["status"] == "CompileError":
+                audit["compile_errors"] += 1
+                continue
+            ignored = mutant.get("statusReason") == BLOCK_FILTER_REASON
+            audit["ignored"] += ignored
+            if mutant["status"] == "Ignored" and not ignored:
+                continue
+            predicted = any(start <= inner_start and inner_end <= end and inner is not mutant
+                            for inner_start, inner_end, inner in eligible)
+            if predicted != ignored:
+                audit["disagreements"].append({"path": path, "location": mutant["location"],
+                                               "reported_ignored": ignored})
+    return audit
+
+
 def stryker_records(report, root, project):
     records = {}
     for filename, file in report["files"].items():
@@ -77,11 +117,7 @@ def stryker_records(report, root, project):
         mutants = file.get("mutants", [])
         if mutants and (root / path).read_bytes().decode("utf-8-sig") != source:
             raise ValueError(f"Stryker report source differs from the workspace: {path}")
-        for mutant in mutants:
-            start = source_offset(source, mutant["location"]["start"])
-            end = source_offset(source, mutant["location"]["end"])
-            if end < start:
-                raise ValueError(f"Invalid Stryker source range in {path}")
+        for start, end, mutant in located_mutants(source, mutants):
             identity = canonical_edit(path, source, start, source[start:end], mutant["replacement"])
             unique(records, identity, STATUS[mutant["status"]], mutant.get("statusReason"))
     return records

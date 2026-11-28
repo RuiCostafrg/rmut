@@ -108,7 +108,7 @@ Stryker report gives these counts. The candidate discovery inventory comes from
 the Rust engine on the same pinned source, with edits compared using
 `benchmarks/reports.py`.
 
-| Stryker operator | Originally missing | Still missing |
+| Stryker operator | Originally missing | Missing after the first expansion |
 | --- | ---: | ---: |
 | Block removal | 100 | 0 |
 | Statement removal | 49 | 0 |
@@ -160,6 +160,34 @@ below use UTF-16 source offsets.
 
 The two statement and block removals that fail Rmut's build remove required
 control flow from the fresh source. The two edits that survive Rmut and fail
-Stryker's build require investigation of Stryker's instrumented compilation
-and rollback. The one unfinished result is Rmut's recursive-operator crash.
+Stryker's build are collaterally rolled back during instrumented compilation.
+In the debug log, Stryker pairs arithmetic mutant 239 with LINQ mutant 240,
+and relational mutant 323 with LINQ mutant 325. In both cases, the LINQ
+replacement turns the integer property `enumList.Count` into the
+`enumList.Sum` method group. The resulting conditional cannot provide an
+integer operand for subtraction or comparison, and Stryker rolls back both
+the outer operator mutant and the LINQ mutant. The one unfinished result is Rmut's recursive-operator crash.
 The capture contains both reports and the full differential.
+
+#### Inventory completion and block eligibility
+
+Conditional forcing, member-name substitutions and explicit object or collection
+initializer removal close the remaining 24 discovery gaps. A discovery-only
+protocol run against the pinned files matched all 396 source edits in the
+[PR #24 hosted artifact](https://github.com/RuiCostafrg/rmut/actions/runs/46102469764).
+The hosted regression requires both tools to report all 396 edits with an empty
+inventory differential.
+
+The hosted regression also reports and checks Stryker's block-filter decisions.
+It takes the original spans from the raw report and reconstructs the eligible
+mutants before the block filter ran. An ignored nested block is eligible for
+containment if this filter itself ignored it. A block rejected by instrumented
+compilation cannot be ignored by the filter. This replay accounts for 93
+ignored blocks, four compile errors and three executed blocks.
+
+Fresh compilation cannot substitute for Stryker's eligibility evidence. On the
+pinned run, ignoring every block containing an edit would incorrectly ignore
+all four Stryker compile errors. Keeping blocks that fail fresh compilation
+instead would miss 36 of the 93 ignored blocks. The audit records the observed
+eligibility independently of the outcome differential. The benchmark gate
+still requires matching outcomes and SmartEnum stays comparison-only.

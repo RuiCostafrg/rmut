@@ -25,7 +25,8 @@ Add `--json report.json` to save the baseline and individual mutant outcomes.
 Use `--discovery stryker` to opt into the broader Rust discovery profile used
 for SmartEnum conformance. It adds block and statement removal, pattern
 negation, condition and boolean negation, string replacement, and additional
-unary, update and bitwise operators. The default `--discovery binary` selects
+unary, update and bitwise operators, plus conditional forcing, LINQ member
+substitutions and initializer removal. The default `--discovery binary` selects
 the binary operator inventory, including both Stryker relational alternatives
 for each of `<`, `<=`, `>` and `>=`. Runs on older versions with one
 alternative per comparison can report fewer mutants. New non-switchable edits run in

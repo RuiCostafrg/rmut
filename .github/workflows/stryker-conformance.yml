@@ -136,6 +136,7 @@ jobs:
           test "$status" -le 1
           python3 - "$results/pair-01/pair.json" <<'PYCODE'
           import json
+          import os
           import sys
 
           with open(sys.argv[1]) as stream:
@@ -145,6 +146,14 @@ jobs:
               print(f"{tool}: exit={result.get('exit_code')}, normalized mutants={len(result.get('mutants', []))}")
               if "error" in result:
                   print(f"::warning::{tool} comparison incomplete. See its evidence artifact.")
+          if os.environ["WORKLOAD"] == "smart-enum":
+              assert all(len(pair[tool].get("mutants", [])) == 396 for tool in ("stryker", "rmut")), {
+                  tool: pair[tool].get("error") for tool in ("stryker", "rmut")
+              }
+              diff = pair["differential"]
+              assert not diff["stryker_only"] and not diff["rmut_only"], diff
+              audit = pair["stryker"]["block_filter"]
+              assert audit == {"blocks": 100, "compile_errors": 4, "ignored": 93, "disagreements": []}, audit
           if all(pair[tool].get("mutants") for tool in ("stryker", "rmut")):
               print({key: len(rows) for key, rows in pair["differential"].items()})
               if not pair["equivalent"]:
