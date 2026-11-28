@@ -84,7 +84,10 @@ internal static class NativeRunner
                 switch (request)
                 {
                     case Baseline:
-                        await ReplyAsync(await session.BaselineAsync(cancellation));
+                        var baseline = await session.BaselineAsync(cancellation);
+                        if (session.UsedBaselineBuildMode != BaselineBuildMode.Default)
+                            log($"Baseline build mode: {session.UsedBaselineBuildMode}");
+                        await ReplyAsync(baseline);
                         break;
                     case Sources:
                         var sources = await session.DiscoverAsync(cancellation);

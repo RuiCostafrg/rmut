@@ -34,6 +34,7 @@ internal sealed class EvaluationSession : IAsyncDisposable
     private VSTestConsole? vstestConsole;
 
     public int SwitchedWorkers { get; }
+    public BaselineBuildMode UsedBaselineBuildMode { get; private set; }
 
     public EvaluationSession(RunOptions options, TimeSpan timeout, CancellationToken cancellation)
     {
@@ -64,6 +65,8 @@ internal sealed class EvaluationSession : IAsyncDisposable
                 timeout, cancellation);
         var build = await BuildAsync(privateProject, cancellation, server: compilerServer,
             mode: compilerServer is null ? BaselineBuildMode.Default : baselineBuild);
+        if (build.Outcome == Outcome.Passed && compilerServer is not null)
+            UsedBaselineBuildMode = baselineBuild;
         if (build.Outcome != Outcome.Passed && compilerServer is not null)
         {
             await StopCompilerServerAsync();

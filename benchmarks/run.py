@@ -239,6 +239,10 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
                     result["parallel_control"] = "Switched control completed with a speculative mutant." in log.splitlines()
                     if not result["parallel_control"]:
                         raise ValueError("Rmut did not complete the switched control alongside a mutant")
+                if baseline_mode := spec.get("require_baseline_build"):
+                    result["baseline_build"] = f"Baseline build mode: {baseline_mode}" in log.splitlines()
+                    if not result["baseline_build"]:
+                        raise ValueError("Rmut did not use the requested baseline build mode")
                 expected_ids = [mutant["id"] for mutant in data["mutants"]]
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):
