@@ -241,3 +241,11 @@ peak was 332.49 MiB PSS during the original build. The trial used a
 different CPU model, so it cannot isolate the effect of the GC setting.
 The setting was reverted because this run did not demonstrate a memory
 gate improvement.
+
+The [untuned Xeon replication](https://github.com/RuiCostafrg/rmut/actions/runs/46103692441/artifacts/15246702580)
+used an Intel Xeon 6975P-C VM. All five measured pairs matched. The
+median paired wall ratio was 0.472× (0.442–0.567), which crossed the
+0.50× gate. Peak memory failed at 0.813× (0.807–0.830). CPU passed
+at 0.585× (0.583–0.598). The diagnostic peak of 333.59 MiB PSS occurred
+during the original build, with 178.92 MiB in MSBuild and 122.29 MiB
+in the private compiler.

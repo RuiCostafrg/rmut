@@ -376,6 +376,9 @@ internal sealed class EvaluationSession : IAsyncDisposable
             ["MSBUILDUSESERVER"] = "0",
             ["MSBUILDDISABLENODEREUSE"] = "1"
         };
+        if (environment is not null && Environment.GetEnvironmentVariable("DOTNET_gcServer") is null &&
+            Environment.GetEnvironmentVariable("COMPlus_gcServer") is null)
+            environment["DOTNET_gcServer"] = "0";
         var build = await DotnetProcess.RunAsync(Path.GetDirectoryName(testProject)!, timeout, cancellation,
             environment, arguments);
         if (build.TimedOut)
