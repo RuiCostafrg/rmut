@@ -21,7 +21,7 @@ Each row names a 5.1.0 `ignore-mutations` family. A fixture name links the famil
 | Family | Fixture or input | Rmut status |
 | --- | --- | --- |
 | `arithmetic` | `shared-operators`, `relational-gap`; also exercise subtraction, division, remainder and string concatenation | Partial. Fixtures cover addition and multiplication. |
-| `equality` | `shared-operators` (`==`), `relational-gap` (`>`); add other relational operators and relational patterns | Partial. Rmut emits one replacement per comparison. |
+| `equality` | `shared-operators` (`==`), `relational-gap` (`>`); add other relational operators and relational patterns | Partial. Both binary relational replacements match. Relational patterns remain open. |
 | `logical` | `shared-operators`, `operator-exclusion-gap`; add `\|\|`, logical XOR and binary patterns | Partial. |
 | `bitwise` | AND, OR, XOR and signed/unsigned shifts | Gap. |
 | `boolean` | Both Boolean literals | Gap. |
@@ -99,3 +99,95 @@ tool logs, package fingerprints and normalized differences.
 Both workloads remain compare-only. Green capture jobs indicate that the
 workflow saved evidence. Neither workload established parity, so no elapsed
 time, CPU or memory comparison was collected.
+
+### SmartEnum discovery
+
+The `conformance-smart-enum` artifact from the original hosted run above
+records 333 Stryker-only edit identities. Joining those identities to the raw
+Stryker report gives these counts. The candidate discovery inventory comes from
+the Rust engine on the same pinned source, with edits compared using
+`benchmarks/reports.py`.
+
+| Stryker operator | Originally missing | Missing after the first expansion |
+| --- | ---: | ---: |
+| Block removal | 100 | 0 |
+| Statement removal | 49 | 0 |
+| Equality | 48 | 0 |
+| Negate expression | 32 | 0 |
+| Boolean literal | 32 | 0 |
+| Remove logical not | 18 | 0 |
+| String | 18 | 0 |
+| Bitwise | 8 | 0 |
+| Conditional true | 5 | 5 |
+| Conditional false | 5 | 5 |
+| Unary minus to plus | 3 | 0 |
+| LINQ Count to Sum | 3 | 3 |
+| LINQ OrderBy to OrderByDescending | 2 | 2 |
+| LINQ FirstOrDefault to First | 2 | 2 |
+| LINQ Last to First | 2 | 2 |
+| LINQ Append to Prepend | 2 | 2 |
+| Collection initializer | 1 | 1 |
+| Post-decrement to increment | 1 | 0 |
+| LINQ First to FirstOrDefault | 1 | 1 |
+| LINQ Any to All | 1 | 1 |
+| **Total** | **333** | **24** |
+
+With `--discovery stryker`, all 372 Rmut edit identities match a Stryker
+identity. This includes the relational alternatives from PR #17. Conditional
+forcing, member-name substitutions from the LINQ mutator and collection
+initializer removal remain outside this profile.
+
+The historical Stryker report marked 93 of the 100 block edits ignored because
+another eligible edit covered the same block. Rmut evaluates the whole
+discovered inventory by rebuilding each fresh mutant. Stryker's filter depends
+on the result of instrumented compilation and other exclusions, so it cannot be
+reproduced by a syntax-only nested-edit check. The crash classification and
+compile rollback differences described above also remain separate from discovery.
+SmartEnum stays comparison-only.
+
+The [first expanded hosted run](https://github.com/RuiCostafrg/rmut/actions/runs/46079222401)
+confirmed the inventory and matched 274 of the 372 shared outcomes. Of the 98
+differences, 93 are block edits Stryker ignored. The five other differences
+below use UTF-16 source offsets.
+
+| File and offset | Edit | Stryker | Rmut |
+| --- | --- | --- | --- |
+| `SmartEnum.cs` 3140 | Empty the comparer method body | Killed | Build failed |
+| `SmartEnum.cs` 16521 | Replace `==` with `!=` | Timed out | Runner error |
+| `SmartEnumComparerAttribute.cs` 1997 | Remove the throw statement | Survived | Build failed |
+| `SmartFlagEngine.cs` 7299 | Replace `-` with `+` | Build failed | Survived |
+| `SmartFlagEnum.cs` 14004 | Replace `>` with `<` | Build failed | Survived |
+
+The two statement and block removals that fail Rmut's build remove required
+control flow from the fresh source. The two edits that survive Rmut and fail
+Stryker's build are collaterally rolled back during instrumented compilation.
+In the debug log, Stryker pairs arithmetic mutant 239 with LINQ mutant 240,
+and relational mutant 323 with LINQ mutant 325. In both cases, the LINQ
+replacement turns the integer property `enumList.Count` into the
+`enumList.Sum` method group. The resulting conditional cannot provide an
+integer operand for subtraction or comparison, and Stryker rolls back both
+the outer operator mutant and the LINQ mutant. The one unfinished result is Rmut's recursive-operator crash.
+The capture contains both reports and the full differential.
+
+#### Inventory completion and block eligibility
+
+Conditional forcing, member-name substitutions and explicit object or collection
+initializer removal close the remaining 24 discovery gaps. A discovery-only
+protocol run against the pinned files matched all 396 source edits in the
+[PR #24 hosted artifact](https://github.com/RuiCostafrg/rmut/actions/runs/46102469764).
+The hosted regression requires both tools to report all 396 edits with an empty
+inventory differential.
+
+The hosted regression also reports and checks Stryker's block-filter decisions.
+It takes the original spans from the raw report and reconstructs the eligible
+mutants before the block filter ran. An ignored nested block is eligible for
+containment if this filter itself ignored it. A block rejected by instrumented
+compilation cannot be ignored by the filter. This replay accounts for 93
+ignored blocks, four compile errors and three executed blocks.
+
+Fresh compilation cannot substitute for Stryker's eligibility evidence. On the
+pinned run, ignoring every block containing an edit would incorrectly ignore
+all four Stryker compile errors. Keeping blocks that fail fresh compilation
+instead would miss 36 of the 93 ignored blocks. The audit records the observed
+eligibility independently of the outcome differential. The benchmark gate
+still requires matching outcomes and SmartEnum stays comparison-only.

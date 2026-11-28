@@ -1,4 +1,6 @@
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::io;
 use std::ops::Range;
 use tree_sitter::{Node, Parser};
@@ -7,7 +9,8 @@ pub struct Mutation<'a> {
     pub id: String,
     pub line: usize,
     pub original: &'a str,
-    pub replacement: &'static str,
+    pub replacement: Cow<'a, str>,
+    pub offset: usize,
     start: usize,
     end: usize,
     switch: Option<Range<usize>>,
@@ -15,18 +18,23 @@ pub struct Mutation<'a> {
 
 impl Mutation<'_> {
     pub fn apply(&self, source: &str) -> String {
-        let rest = &source[self.end..];
-        let needs_space = match self.replacement {
-            "+" | "-" => rest.starts_with(self.replacement),
-            "/" => rest.starts_with(['/', '*']),
-            _ => false,
-        };
-        let space = if needs_space { " " } else { "" };
-        format!(
-            "{}{replacement}{space}{rest}",
-            &source[..self.start],
-            replacement = self.replacement
-        )
+        let left = &source[..self.start];
+        let right = &source[self.end..];
+        let replacement = self.replacement.as_ref();
+        let before = token_separator(left, replacement);
+        let after = token_separator(replacement, right);
+        format!("{left}{before}{replacement}{after}{right}")
+    }
+}
+
+fn token_separator(left: &str, right: &str) -> &'static str {
+    match (left.as_bytes().last(), right.as_bytes().first()) {
+        (Some(b'+'), Some(b'+'))
+        | (Some(b'-'), Some(b'-'))
+        | (Some(b'/'), Some(b'/' | b'*'))
+        | (Some(b'&'), Some(b'&'))
+        | (Some(b'|'), Some(b'|')) => " ",
+        _ => "",
     }
 }
 
@@ -69,26 +77,42 @@ fn switch_range(node: Node<'_>, source: &str) -> Option<Range<usize>> {
 }
 
 pub fn instrument(source: &str, mutations: &[Mutation<'_>], selector: &str) -> Option<String> {
-    let mut end = source.len();
-    let mut pieces = Vec::new();
-    for mutant in mutations.iter().rev() {
-        let Some(range) = &mutant.switch else {
+    let mut end = 0;
+    let mut instrumented = String::new();
+    // Discovery keeps all alternatives for one operator adjacent. Emit one
+    // conditional chain for its expression so only the selected alternative runs.
+    let switchable: Vec<_> = mutations
+        .iter()
+        .filter(|mutant| mutant.can_switch())
+        .collect();
+    for alternatives in switchable.chunk_by(|a, b| a.start == b.start) {
+        let Some(range) = &alternatives[0].switch else {
             continue;
         };
-        let original = &source[range.clone()];
-        let left = &source[range.start..mutant.start];
-        let right = &source[mutant.end..range.end];
-        pieces.push(format!(
-            "(global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\" ? ({left}{}{right}) : ({original})){}",
-            mutant.id, mutant.replacement, &source[range.end..end]
-        ));
-        end = range.start;
+        instrumented.push_str(&source[end..range.start]);
+        instrumented.push('(');
+        for mutant in alternatives {
+            let left = &source[range.start..mutant.start];
+            let right = &source[mutant.end..range.end];
+            let replacement = mutant.replacement.as_ref();
+            let before = token_separator(left, replacement);
+            let after = token_separator(replacement, right);
+            write!(
+                instrumented,
+                "(global::System.Environment.GetEnvironmentVariable(\"{selector}\") == \"{}\") ? ({left}{before}{replacement}{after}{right}) : ",
+                mutant.id
+            )
+            .expect("writing to a String cannot fail");
+        }
+        instrumented.push('(');
+        instrumented.push_str(&source[range.clone()]);
+        instrumented.push_str("))");
+        end = range.end;
     }
-    if pieces.is_empty() {
+    if instrumented.is_empty() {
         return None;
     }
-    let mut instrumented = source[..end].to_owned();
-    instrumented.extend(pieces.into_iter().rev());
+    instrumented.push_str(&source[end..]);
     Some(instrumented)
 }
 
@@ -98,22 +122,21 @@ impl Mutation<'_> {
     }
 }
 
-fn replacement(operator: &str) -> Option<&'static str> {
+fn replacements(operator: &str) -> &'static [&'static str] {
     match operator {
-        "+" => Some("-"),
-        "-" => Some("+"),
-        "*" => Some("/"),
-        "%" => Some("*"),
-        "/" => Some("*"),
-        "==" => Some("!="),
-        "!=" => Some("=="),
-        "<" => Some("<="),
-        "<=" => Some("<"),
-        ">" => Some(">="),
-        ">=" => Some(">"),
-        "&&" => Some("||"),
-        "||" => Some("&&"),
-        _ => None,
+        "+" => &["-"],
+        "-" => &["+"],
+        "*" => &["/"],
+        "%" | "/" => &["*"],
+        "==" => &["!="],
+        "!=" => &["=="],
+        "<" => &[">", "<="],
+        "<=" => &[">", "<"],
+        ">" => &["<", ">="],
+        ">=" => &["<", ">"],
+        "&&" => &["||"],
+        "||" => &["&&"],
+        _ => &[],
     }
 }
 
@@ -122,7 +145,12 @@ pub struct Discovery<'a> {
     pub can_instrument: bool,
 }
 
-pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Result<Discovery<'a>> {
+pub fn discover<'a>(
+    parser: &mut Parser,
+    path: &str,
+    source: &'a str,
+    stryker: bool,
+) -> io::Result<Discovery<'a>> {
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| io::Error::other("C# parsing failed"))?;
@@ -132,8 +160,9 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
         ));
     }
     let mut cursor = tree.walk();
-    let mut operators = Vec::new();
+    let mut edits = Vec::new();
     let mut can_instrument = true;
+    let mut excluded_end = 0;
     'walk: loop {
         let node = cursor.node();
         if node.kind() == "preproc_if" || node.kind() == "#if" {
@@ -155,13 +184,45 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
         }) {
             can_instrument = false;
         }
-        if node.kind() == "binary_expression" {
+        if stryker && node.start_byte() >= excluded_end && skip_stryker_subtree(node, source) {
+            excluded_end = node.end_byte();
+        }
+        let included = node.start_byte() >= excluded_end;
+        if included && node.kind() == "binary_expression" {
             if let Some(operator) = node
                 .child_by_field_name("operator")
                 .filter(|op| !op.is_missing())
             {
-                operators.push((operator.byte_range(), switch_range(node, source)));
+                let token = &source[operator.byte_range()];
+                let alternatives = if stryker {
+                    match token {
+                        "&" => &["|"][..],
+                        "|" => &["&"][..],
+                        "+" if ["left", "right"]
+                            .into_iter()
+                            .any(|side| node.child_by_field_name(side).is_some_and(is_string)) =>
+                        {
+                            &[]
+                        }
+                        _ => replacements(token),
+                    }
+                } else {
+                    replacements(token)
+                };
+                if !alternatives.is_empty() {
+                    let switch = switch_range(node, source);
+                    for &replacement in alternatives {
+                        edits.push(Edit {
+                            range: operator.byte_range(),
+                            replacement: Cow::Borrowed(replacement),
+                            switch: switch.clone(),
+                        });
+                    }
+                }
             }
+        }
+        if stryker && included {
+            stryker_edits(node, source, &mut edits);
         }
         if cursor.goto_first_child() {
             continue;
@@ -176,37 +237,543 @@ pub fn discover<'a>(parser: &mut Parser, path: &str, source: &'a str) -> io::Res
         }
     }
 
-    operators.sort_unstable_by_key(|(range, _)| range.start);
+    edits.sort_by_key(|edit| edit.range.start);
     let mut offset = 0;
     let mut line = 1;
     let mut previous = 0;
-    let mutations = operators
+    let mutations = edits
         .into_iter()
-        .filter_map(|(range, switch)| {
-            let original = &source[range.clone()];
-            let replacement = replacement(original)?;
-            let prefix = &source[previous..range.start];
-            offset += prefix.encode_utf16().count();
-            line += prefix
-                .matches(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
-                .count()
-                - prefix.matches("\r\n").count();
-            previous = range.start;
-            let identity = format!("{offset}:{original}:{replacement}:{path}");
-            let id = format!("{:X}", Sha256::digest(identity.as_bytes()));
-            Some(Mutation {
-                id,
-                line,
-                original,
-                replacement,
-                start: range.start,
-                end: range.end,
-                switch,
-            })
-        })
+        .map(
+            |Edit {
+                 range,
+                 replacement,
+                 switch,
+             }| {
+                let original = &source[range.clone()];
+                let prefix = &source[previous..range.start];
+                offset += prefix.encode_utf16().count();
+                line += prefix
+                    .matches(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
+                    .count()
+                    - prefix.matches("\r\n").count();
+                previous = range.start;
+                let identity = format!("{offset}:{original}:{replacement}:{path}");
+                Mutation {
+                    id: format!("{:X}", Sha256::digest(identity.as_bytes())),
+                    line,
+                    original,
+                    replacement,
+                    offset,
+                    start: range.start,
+                    end: range.end,
+                    switch,
+                }
+            },
+        )
         .collect();
     Ok(Discovery {
         mutations,
         can_instrument,
     })
+}
+
+struct Edit<'a> {
+    range: Range<usize>,
+    replacement: Cow<'a, str>,
+    switch: Option<Range<usize>>,
+}
+
+fn skip_stryker_subtree(node: Node<'_>, source: &str) -> bool {
+    match node.kind() {
+        "attribute_list" | "parameter_list" | "enum_member_declaration" | "using_directive" => true,
+        "field_declaration" | "local_declaration_statement" => {
+            let mut cursor = node.walk();
+            let is_const = node
+                .named_children(&mut cursor)
+                .any(|child| child.kind() == "modifier" && &source[child.byte_range()] == "const");
+            is_const
+        }
+        _ => false,
+    }
+}
+
+fn is_string(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "string_literal"
+            | "verbatim_string_literal"
+            | "raw_string_literal"
+            | "interpolated_string_expression"
+    )
+}
+
+fn first_syntax_child(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = node.walk();
+    let child = node
+        .named_children(&mut cursor)
+        .find(|child| !child.is_extra());
+    child
+}
+
+fn ancestors(node: Node<'_>) -> impl Iterator<Item = Node<'_>> {
+    std::iter::successors(node.parent(), Node::parent)
+}
+
+fn contains_syntax(node: Node<'_>, kinds: &[&str]) -> bool {
+    if kinds.contains(&node.kind()) {
+        return true;
+    }
+    if matches!(
+        node.kind(),
+        "lambda_expression" | "anonymous_method_expression"
+    ) {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .any(|child| contains_syntax(child, kinds));
+    found
+}
+
+fn removable_statement(node: Node<'_>) -> bool {
+    match node.kind() {
+        "expression_statement" => !contains_syntax(node, &["assignment_expression", "out"]),
+        "yield_statement" => true,
+        "return_statement" if first_syntax_child(node).is_some() => false,
+        "return_statement"
+            if ancestors(node)
+                .find(|parent| parent.kind() == "if_statement")
+                .and_then(|parent| parent.child_by_field_name("condition"))
+                .is_some_and(|condition| contains_syntax(condition, &["declaration_pattern"])) =>
+        {
+            false
+        }
+        "return_statement" | "break_statement" | "continue_statement" | "goto_statement"
+        | "throw_statement" => !ancestors(node).any(|parent| parent.kind() == "switch_section"),
+        _ => false,
+    }
+}
+
+fn removable_block(node: Node<'_>, source: &str) -> bool {
+    if first_syntax_child(node).is_none()
+        || node.parent().is_some_and(|parent| {
+            parent.kind() == "while_statement"
+                && parent
+                    .child_by_field_name("condition")
+                    .is_some_and(|condition| &source[condition.byte_range()] == "true")
+        })
+    {
+        return false;
+    }
+    for parent in ancestors(node) {
+        match parent.kind() {
+            "local_function_statement" => break,
+            "switch_section" => return false,
+            "constructor_declaration"
+                if parent
+                    .parent()
+                    .and_then(|list| list.parent())
+                    .is_some_and(|owner| owner.kind() == "struct_declaration") =>
+            {
+                let mut cursor = node.walk();
+                return !node.named_children(&mut cursor).any(|child| {
+                    child.kind() == "expression_statement"
+                        && first_syntax_child(child)
+                            .is_some_and(|expression| expression.kind() == "assignment_expression")
+                });
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+fn negatable_condition(mut node: Node<'_>) -> bool {
+    if !node.parent().is_some_and(|parent| {
+        matches!(parent.kind(), "if_statement" | "while_statement")
+            && parent.child_by_field_name("condition") == Some(node)
+    }) {
+        return false;
+    }
+    if node.kind() == "is_pattern_expression" {
+        // The grammar can absorb the remainder of a condition into a
+        // constant pattern, e.g. "x is null && flag". Roslyn treats that
+        // as a binary condition. Parenthesized pattern expressions stop
+        // the check because their operators are genuinely inside the pattern.
+        let Some(mut pattern) = node.child_by_field_name("pattern") else {
+            return false;
+        };
+        while matches!(pattern.kind(), "negated_pattern" | "constant_pattern") {
+            let Some(inner) = first_syntax_child(pattern) else {
+                return false;
+            };
+            pattern = inner;
+        }
+        return pattern.kind() == "binary_expression"
+            && pattern
+                .child_by_field_name("operator")
+                .is_some_and(|operator| matches!(operator.kind(), "&&" | "||"));
+    }
+    while node.kind() == "parenthesized_expression" {
+        let Some(inner) = first_syntax_child(node) else {
+            return false;
+        };
+        node = inner;
+    }
+    !matches!(
+        (
+            node.kind(),
+            node.child_by_field_name("operator")
+                .or_else(|| node.child(0))
+                .map(|token| token.kind())
+        ),
+        ("binary_expression", Some("==" | "!=")) | ("prefix_unary_expression", Some("!"))
+    )
+}
+
+// Stryker's LINQ mutator matches member names syntactically, including
+// properties and user-defined members. Compilation determines viability.
+fn linq_replacement(member: &str) -> Option<&'static str> {
+    Some(match member.trim_start_matches('@') {
+        "FirstOrDefault" | "Last" => "First",
+        "First" => "FirstOrDefault",
+        "Single" => "SingleOrDefault",
+        "SingleOrDefault" => "Single",
+        "All" => "Any",
+        "Any" => "All",
+        "Skip" => "Take",
+        "Take" => "Skip",
+        "SkipWhile" => "TakeWhile",
+        "TakeWhile" => "SkipWhile",
+        "Min" | "Sum" => "Max",
+        "Max" | "Average" => "Min",
+        "Count" => "Sum",
+        "OrderBy" => "OrderByDescending",
+        "OrderByDescending" => "OrderBy",
+        "ThenBy" => "ThenByDescending",
+        "ThenByDescending" => "ThenBy",
+        "Reverse" => "AsEnumerable",
+        "AsEnumerable" => "Reverse",
+        "Union" => "Intersect",
+        "Intersect" => "Union",
+        "Concat" => "Except",
+        "Except" => "Concat",
+        "MinBy" => "MaxBy",
+        "MaxBy" => "MinBy",
+        "SkipLast" => "TakeLast",
+        "TakeLast" => "SkipLast",
+        "Order" => "OrderDescending",
+        "OrderDescending" => "Order",
+        "UnionBy" => "IntersectBy",
+        "IntersectBy" => "UnionBy",
+        "Append" => "Prepend",
+        "Prepend" => "Append",
+        _ => return None,
+    })
+}
+
+fn linq_edit(node: Node<'_>, source: &str) -> Option<(Range<usize>, &'static str)> {
+    let name = node.child_by_field_name("name")?;
+    let identifier = if name.kind() == "generic_name" {
+        first_syntax_child(name)?
+    } else {
+        name
+    };
+    let replacement = linq_replacement(&source[identifier.byte_range()])?;
+    if matches!(
+        replacement,
+        "All"
+            | "SkipWhile"
+            | "TakeWhile"
+            | "OrderBy"
+            | "OrderByDescending"
+            | "ThenBy"
+            | "ThenByDescending"
+            | "Union"
+            | "Intersect"
+            | "SkipLast"
+            | "TakeLast"
+            | "MaxBy"
+            | "MinBy"
+            | "IntersectBy"
+            | "UnionBy"
+            | "Append"
+            | "Prepend"
+    ) && node.parent().is_some_and(|parent| {
+        matches!(
+            parent.kind(),
+            "member_access_expression" | "member_binding_expression"
+        )
+    }) && ancestors(node)
+        .find(|parent| {
+            !matches!(
+                parent.kind(),
+                "member_access_expression"
+                    | "member_binding_expression"
+                    | "conditional_access_expression"
+            )
+        })
+        .filter(|parent| parent.kind() == "invocation_expression")
+        .and_then(|invocation| invocation.child_by_field_name("arguments"))
+        .is_some_and(|arguments| first_syntax_child(arguments).is_none())
+    {
+        return None;
+    }
+    Some((name.byte_range(), replacement))
+}
+
+fn conditional_branches<'a>(node: Node<'_>, source: &'a str) -> Option<(&'a str, &'a str)> {
+    let condition = node.child_by_field_name("condition")?;
+    if contains_syntax(condition, &["declaration_pattern"]) {
+        return None;
+    }
+    let consequence = node.child_by_field_name("consequence")?;
+    let alternative = node.child_by_field_name("alternative")?;
+    let colon = node
+        .children(&mut node.walk())
+        .find(|child| child.kind() == ":")?;
+    // Preserve the consequence token's same-line trailing trivia, including
+    // a line break, and discard indentation attached to the original colon.
+    let trailing = &source[consequence.end_byte()..colon.start_byte()];
+    let trailing_end = trailing.find(['\n', '\r']).map_or(trailing.len(), |index| {
+        index
+            + if trailing[index..].starts_with("\r\n") {
+                2
+            } else {
+                1
+            }
+    });
+    Some((
+        &source[consequence.start_byte()..consequence.end_byte() + trailing_end],
+        &source[alternative.byte_range()],
+    ))
+}
+
+fn stryker_edits<'a>(node: Node<'_>, source: &'a str, edits: &mut Vec<Edit<'a>>) {
+    let text = |node: Node<'_>| &source[node.byte_range()];
+    let mut add = |range, replacement| {
+        edits.push(Edit {
+            range,
+            replacement,
+            switch: None,
+        })
+    };
+    if negatable_condition(node) {
+        add(node.byte_range(), Cow::Owned(format!("!({})", text(node))));
+    }
+
+    let replacement = match node.kind() {
+        "conditional_expression" => {
+            if let Some((consequence, alternative)) = conditional_branches(node, source) {
+                for value in ["true", "false"] {
+                    add(
+                        node.byte_range(),
+                        Cow::Owned(format!("({value}?{consequence}:{alternative})")),
+                    );
+                }
+            }
+            return;
+        }
+        "member_access_expression" | "member_binding_expression" => {
+            if let Some((range, replacement)) = linq_edit(node, source) {
+                add(range, Cow::Borrowed(replacement));
+            }
+            return;
+        }
+        "object_creation_expression" => {
+            if let Some(initializer) = node
+                .child_by_field_name("initializer")
+                .filter(|initializer| first_syntax_child(*initializer).is_some())
+            {
+                add(initializer.byte_range(), Cow::Borrowed("{}"));
+            }
+            return;
+        }
+        "block" if removable_block(node, source) => "{}",
+        "boolean_literal" => match text(node) {
+            "true" => "false",
+            _ => "true",
+        },
+        "string_literal" | "verbatim_string_literal" | "raw_string_literal" => {
+            let literal = text(node);
+            if literal.ends_with("u8")
+                || literal.ends_with("U8")
+                || node
+                    .parent()
+                    .and_then(|parent| parent.parent())
+                    .filter(|parent| parent.kind() == "argument_list")
+                    .and_then(|list| list.parent())
+                    .filter(|expression| expression.kind() == "object_creation_expression")
+                    .and_then(|creation| creation.child_by_field_name("type"))
+                    .is_some_and(|kind| {
+                        matches!(
+                            text(kind),
+                            "Regex"
+                                | "System.Text.RegularExpressions.Regex"
+                                | "Guid"
+                                | "System.Guid"
+                        )
+                    })
+            {
+                return;
+            }
+            if matches!(literal, "\"\"" | "@\"\"")
+                || node.kind() == "raw_string_literal" && literal.trim_matches('"').is_empty()
+            {
+                "\"Stryker was here!\""
+            } else {
+                "\"\""
+            }
+        }
+        "interpolated_string_expression" if node.child_count() > 3 => "$\"\"",
+        "is_pattern_expression" => {
+            let Some(pattern) = node.child_by_field_name("pattern") else {
+                return;
+            };
+            let prefix = &source[node.start_byte()..pattern.start_byte()];
+            let replacement = if pattern.kind() == "negated_pattern" {
+                let Some(inner) = first_syntax_child(pattern) else {
+                    return;
+                };
+                format!("{prefix}{}", text(inner))
+            } else {
+                format!("{prefix}not {}", text(pattern))
+            };
+            add(node.byte_range(), Cow::Owned(replacement));
+            return;
+        }
+        "prefix_unary_expression" | "postfix_unary_expression" => {
+            let Some(operand) = first_syntax_child(node) else {
+                return;
+            };
+            let operator = if node.kind() == "prefix_unary_expression" {
+                node.child(0)
+            } else {
+                node.children(&mut node.walk()).last()
+            };
+            let Some(operator) = operator else {
+                return;
+            };
+            let replacement = match operator.kind() {
+                "!" | "~" if node.kind() == "prefix_unary_expression" => {
+                    add(node.byte_range(), Cow::Borrowed(text(operand)));
+                    return;
+                }
+                "-" => "+",
+                "+" => "-",
+                "++" => "--",
+                "--" => "++",
+                _ => return,
+            };
+            add(operator.byte_range(), Cow::Borrowed(replacement));
+            return;
+        }
+        _ if removable_statement(node) => ";",
+        _ => return,
+    };
+    add(node.byte_range(), Cow::Borrowed(replacement));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stryker_profile_discovers_broad_edits_outside_attributes_and_defaults() {
+        let source = r#"
+            [Example("😀")]
+            class Sample
+            {
+                private const bool Constant = true;
+                bool Check(string? input, bool enabled = true)
+                {
+                    if (input is null || enabled)
+                        System.GC.KeepAlive("value");
+                    return !enabled;
+                }
+            }
+        "#;
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .unwrap();
+
+        let binary = discover(&mut parser, "Sample.cs", source, false).unwrap();
+        assert_eq!(binary.mutations.len(), 1);
+        assert_eq!(binary.mutations[0].original, "||");
+
+        let expanded = discover(&mut parser, "Sample.cs", source, true).unwrap();
+        let replacements: Vec<_> = expanded
+            .mutations
+            .iter()
+            .map(|mutation| mutation.replacement.as_ref())
+            .collect();
+        assert_eq!(
+            replacements,
+            [
+                "{}",
+                "!(input is null || enabled)",
+                "input is not null || enabled",
+                "&&",
+                ";",
+                "\"\"",
+                "enabled"
+            ]
+        );
+        let condition = &expanded.mutations[1];
+        let offset = source.find("input is null").unwrap();
+        assert_eq!(condition.offset, source[..offset].encode_utf16().count());
+        assert!(condition
+            .apply(source)
+            .contains("if (!(input is null || enabled))"));
+        assert!(instrument(source, &expanded.mutations, "MUTANT").is_none());
+    }
+    #[test]
+    fn replacements_preserve_adjacent_binary_and_unary_tokens() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .unwrap();
+        for (source, expected) in [
+            ("class C { int M(int a, int b) => a+-b; }", "a+ +b"),
+            ("class C { int M(int a, int b) => a-+b; }", "a- -b"),
+        ] {
+            let discovery = discover(&mut parser, "C.cs", source, true).unwrap();
+            let edited: Vec<_> = discovery
+                .mutations
+                .iter()
+                .map(|m| m.apply(source))
+                .collect();
+            assert_eq!(edited.len(), 2);
+            assert!(edited[1].contains(expected));
+            assert!(edited
+                .iter()
+                .all(|text| { !parser.parse(text, None).unwrap().root_node().has_error() }));
+        }
+    }
+    #[test]
+    fn profile_preserves_conditional_trivia_and_discovers_member_and_initializer_edits() {
+        let source =
+            "class C { object M(bool f, C values) => f ? new C { values }\n    : values.Any(); }";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .unwrap();
+        let discovery = discover(&mut parser, "C.cs", source, true).unwrap();
+        let edits: Vec<_> = discovery
+            .mutations
+            .iter()
+            .map(|mutation| mutation.replacement.as_ref())
+            .collect();
+        assert_eq!(
+            edits,
+            [
+                "(true?new C { values }\n:values.Any())",
+                "(false?new C { values }\n:values.Any())",
+                "{}",
+                "All",
+            ]
+        );
+    }
 }

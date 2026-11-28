@@ -20,6 +20,20 @@ rmut run --project src/MyApp/MyApp.csproj --test-project tests/MyApp.Tests/MyApp
 
 Add `--json report.json` to save the baseline and individual mutant outcomes.
 
+### Discovery modes
+
+Use `--discovery stryker` to opt into the broader Rust discovery profile used
+for SmartEnum conformance. It adds block and statement removal, pattern
+negation, condition and boolean negation, string replacement, and additional
+unary, update and bitwise operators, plus conditional forcing, LINQ member
+substitutions and initializer removal. The default `--discovery binary` selects
+the binary operator inventory, including both Stryker relational alternatives
+for each of `<`, `<=`, `>` and `>=`. Runs on older versions with one
+alternative per comparison can report fewer mutants. New non-switchable edits run in
+fresh mode, including when switched execution is requested. See the
+[SmartEnum comparison](benchmarks/STRYKER-5.1.0.md#smartenum-discovery) for
+the remaining inventory and outcome gaps.
+
 ### Execution modes
 
 Fresh execution is the default. It copies the workspace, restores and builds the test project and its references, and runs the full suite for each mutant.
@@ -47,7 +61,7 @@ dotnet pack src/Rmut.Cli/Rmut.Cli.csproj --configuration Release \
 bash scripts/smoke-package.sh "$feed" 0.0.0-ci
 ```
 
-The smoke test installs the package from the local feed and runs it from a temporary consumer directory. It compares fresh and switched execution and checks that both mutants used the switched build. The fixture expects `+` changed to `-` to be killed and `>` changed to `>=` to survive.
+The smoke test installs the package from the local feed and runs it from a temporary consumer directory. It compares fresh and switched execution and checks that all three mutants used the switched build. The fixture expects `+` changed to `-` to be killed and both replacements of `>` (`<` and `>=`) to survive.
 
 The installed-package smoke test passed with .NET SDK 10.0.404, xUnit 2.9.3, and VSTest 18.12.0 on Linux ARM64. The local PRoot environment required setting `VSTestConsolePath` to the 18.12.0 console from `Microsoft.TestPlatform.CLI` to work around SDK-bundled VSTest host detection. GitHub Actions is configured for Ubuntu 24.04. [VSTest host detection issue](https://github.com/microsoft/vstest/issues/16446)
 

@@ -62,9 +62,11 @@ jobs:
                   "killed", "killed", "killed", "killed", "survived",
               ], pair["rmut"]["mutants"]
           elif workload == "relational-gap":
-              assert status == "1" and not pair["equivalent"], diff
-              assert len(diff["stryker_only"]) == 1 and diff["stryker_only"][0][2:] == [">", "<"], diff
-              assert not diff["outcome_mismatches"], diff
+              assert status == "0" and pair["equivalent"], diff
+              assert sorted((row["identity"][2], row["identity"][3], row["outcome"])
+                            for row in pair["rmut"]["mutants"]) == [
+                  ("+", "-", "killed"), (">", "<", "survived"), (">", ">=", "survived"),
+              ], pair["rmut"]["mutants"]
           else:
               assert status == "1" and not pair["equivalent"], diff
               assert not diff["stryker_only"] and len(diff["outcome_mismatches"]) == 1, diff
@@ -87,13 +89,14 @@ jobs:
 
   real-projects:
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: ${{ matrix.workload == 'smart-enum' && 250 || 55 }}
     strategy:
       fail-fast: false
       matrix:
         workload: [smart-enum, fluent-validation]
     env:
       WORKLOAD: ${{ matrix.workload }}
+      TOOL_TIMEOUT: ${{ matrix.workload == 'smart-enum' && 7200 || 1200 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -129,10 +132,11 @@ jobs:
           python3 -B benchmarks/run.py compare "$WORKLOAD" \
             --checkout "$RUNNER_TEMP/upstream" \
             --stryker "$RUNNER_TEMP/stryker/dotnet-stryker" --rmut "$RUNNER_TEMP/rmut/rmut" \
-            --output "$results" --timeout 1200 || status=$?
+            --output "$results" --timeout "$TOOL_TIMEOUT" || status=$?
           test "$status" -le 1
           python3 - "$results/pair-01/pair.json" <<'PYCODE'
           import json
+          import os
           import sys
 
           with open(sys.argv[1]) as stream:
@@ -142,6 +146,14 @@ jobs:
               print(f"{tool}: exit={result.get('exit_code')}, normalized mutants={len(result.get('mutants', []))}")
               if "error" in result:
                   print(f"::warning::{tool} comparison incomplete. See its evidence artifact.")
+          if os.environ["WORKLOAD"] == "smart-enum":
+              assert all(len(pair[tool].get("mutants", [])) == 396 for tool in ("stryker", "rmut")), {
+                  tool: pair[tool].get("error") for tool in ("stryker", "rmut")
+              }
+              diff = pair["differential"]
+              assert not diff["stryker_only"] and not diff["rmut_only"], diff
+              audit = pair["stryker"]["block_filter"]
+              assert audit == {"blocks": 100, "compile_errors": 4, "ignored": 93, "disagreements": []}, audit
           if all(pair[tool].get("mutants") for tool in ("stryker", "rmut")):
               print({key: len(rows) for key, rows in pair["differential"].items()})
               if not pair["equivalent"]:

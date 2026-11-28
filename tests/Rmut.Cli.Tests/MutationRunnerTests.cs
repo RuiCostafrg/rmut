@@ -73,11 +73,53 @@ public sealed class MutationRunnerTests
             mutant => Assert.Equal(Outcome.Killed, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
+            mutant => Assert.Equal(Outcome.Survived, mutant.Outcome),
             mutant => Assert.Equal(Outcome.BuildFailed, mutant.Outcome));
         string[] expectedExecutions = expectSwitched
-            ? [$"Switched execution {switched.Mutants[0].Id}", $"Switched execution {switched.Mutants[1].Id}"]
+            ? [$"Switched execution {switched.Mutants[0].Id}", $"Switched execution {switched.Mutants[1].Id}", $"Switched execution {switched.Mutants[2].Id}"]
             : [];
         Assert.Equal(expectedExecutions, log.Where(line => line.StartsWith("Switched execution ", StringComparison.Ordinal)));
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task RelationalAlternativesMatchInManagedFreshAndSwitchedRuns()
+    {
+        using var fixture = new Fixture("""
+            Assert.False(Calculator.Less(0));
+            Assert.True(Calculator.LessOrEqual(-1));
+            Assert.True(Calculator.Greater(1));
+            Assert.True(Calculator.GreaterOrEqual(0));
+            """, """
+            // 😀
+            public static class Calculator
+            {
+                public static bool Less(int value) => value < 0;
+                public static bool LessOrEqual(int value) => value <= 0;
+                public static bool Greater(int value) => value > 0;
+                public static bool GreaterOrEqual(int value) => value >= 0;
+            }
+            """);
+
+        var log = new List<string>();
+        var reference = await fixture.RunAsync();
+        var fresh = await fixture.RunNativeAsync();
+        var switched = await fixture.RunNativeAsync(switched: true, log: log.Add);
+
+        Assert.All(new[] { reference, fresh, switched }, report =>
+            Assert.Equal(Outcome.Passed, report.Baseline.Outcome));
+        Assert.Equal(reference.Mutants.Select(Identity), fresh.Mutants.Select(Identity));
+        Assert.Equal(fresh.Mutants.Select(Identity), switched.Mutants.Select(Identity));
+        Assert.Equal(new[]
+        {
+            ("<", ">", Outcome.Survived), ("<", "<=", Outcome.Killed),
+            ("<=", ">", Outcome.Killed), ("<=", "<", Outcome.Survived),
+            (">", "<", Outcome.Killed), (">", ">=", Outcome.Survived),
+            (">=", "<", Outcome.Killed), (">=", ">", Outcome.Killed)
+        }, switched.Mutants.Select(mutant => (mutant.Original, mutant.Replacement, mutant.Outcome)));
+        Assert.Equal(8, switched.Mutants.Select(mutant => mutant.Id).Distinct().Count());
+        Assert.Equal(switched.Mutants.Select(mutant => $"Switched execution {mutant.Id}"),
+            log.Where(line => line.StartsWith("Switched execution ", StringComparison.Ordinal)));
         fixture.AssertInputsUnchanged();
     }
 

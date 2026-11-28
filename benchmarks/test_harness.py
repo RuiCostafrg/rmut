@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from reports import differential, rmut_records, stryker_records
+from reports import BLOCK_FILTER_REASON, differential, rmut_records, stryker_block_filter_audit, stryker_records
 from run import GATES, summarize
 
 
@@ -45,6 +45,28 @@ class DifferentialTests(unittest.TestCase):
         result = differential(reference, candidate)
         self.assertEqual(result["stryker_only"], [list(extra)])
         self.assertEqual(result["outcome_mismatches"][0]["identity"], list(shared))
+
+    def test_block_filter_replays_eligibility_before_block_exclusions(self):
+        def row(start, end, operator, state, reason=None):
+            return {
+                "location": {"start": {"line": 1, "column": start},
+                             "end": {"line": 1, "column": end}},
+                "mutatorName": operator, "status": state, "statusReason": reason,
+            }
+
+        block = "Block removal mutation"
+        report = {"files": {"Subject.cs": {"source": "{{x;}} {y;} {z;}", "mutants": [
+            row(1, 7, block, "Ignored", BLOCK_FILTER_REASON),
+            row(2, 6, block, "Ignored", BLOCK_FILTER_REASON),
+            row(3, 5, "Statement mutation", "Killed"),
+            row(8, 12, block, "CompileError"),
+            row(9, 11, "Statement mutation", "Survived"),
+            row(13, 17, block, "Survived"),
+            row(14, 16, "Statement mutation", "CompileError"),
+        ]}}}
+        self.assertEqual(stryker_block_filter_audit(report), {
+            "blocks": 4, "compile_errors": 1, "ignored": 2, "disagreements": [],
+        })
 
     def test_ignored_file_is_reported_even_without_mutants(self):
         report = {"files": {"Calculator.cs": {"language": "none", "mutants": []}}}

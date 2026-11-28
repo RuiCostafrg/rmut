@@ -25,8 +25,7 @@
     "source": "fixtures/Consumer",
     "project": "Calculator/Calculator.csproj",
     "test_project": "Calculator.Tests/Calculator.Tests.csproj",
-    "shared_operators": true,
-    "comparison_only": "Stryker emits an extra relational replacement"
+    "shared_operators": true
   },
   "no-coverage-gap": {
     "source": "fixtures/Conformance",
@@ -44,6 +43,7 @@
     "project": "src/SmartEnum/SmartEnum.csproj",
     "test_project": "test/SmartEnum.UnitTests/SmartEnum.UnitTests.csproj",
     "source_patch": "patches/smart-enum.patch",
+    "rmut_args": ["--discovery", "stryker"],
     "stryker_config": {
       "target-framework": "net10.0",
       "verbosity": "debug"

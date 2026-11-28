@@ -50,6 +50,7 @@ jobs:
       - name: Build and test
         run: |
           dotnet build src/Rmut.Cli/Rmut.Cli.csproj --configuration Release
+          cargo test --release --locked --manifest-path src/Rmut.Native/Cargo.toml --target-dir src/Rmut.Cli/obj/cargo
           dotnet test tests/Rmut.Engine.Tests/Rmut.Engine.Tests.csproj --configuration Release
           dotnet test tests/Rmut.Cli.Tests/Rmut.Cli.Tests.csproj --configuration Release
       - name: Pack and smoke-test the installed tool

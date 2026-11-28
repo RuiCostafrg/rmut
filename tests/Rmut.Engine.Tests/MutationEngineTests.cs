@@ -12,10 +12,6 @@ public sealed class MutationEngineTests
     [InlineData("%", "*")]
     [InlineData("==", "!=")]
     [InlineData("!=", "==")]
-    [InlineData("<", "<=")]
-    [InlineData("<=", "<")]
-    [InlineData(">", ">=")]
-    [InlineData(">=", ">")]
     [InlineData("&&", "||")]
     [InlineData("||", "&&")]
     public void ReplacesOneSupportedOperator(string original, string replacement)
@@ -27,6 +23,22 @@ public sealed class MutationEngineTests
         Assert.Equal(original, mutant.Original);
         Assert.Equal(replacement, mutant.Replacement);
         Assert.Equal($"var answer = a {replacement} b;", mutant.MutatedSource);
+    }
+
+    [Theory]
+    [InlineData("<", ">", "<=")]
+    [InlineData("<=", ">", "<")]
+    [InlineData(">", "<", ">=")]
+    [InlineData(">=", "<", ">")]
+    public void DiscoversBothRelationalAlternativesAtTheSameOperator(
+        string original, string opposite, string boundary)
+    {
+        var mutants = MutationEngine.Discover("Sample.cs", $"var answer = a {original} b;").ToArray();
+
+        Assert.Equal(new[] { opposite, boundary }, mutants.Select(mutant => mutant.Replacement));
+        Assert.Equal(new[] { $"var answer = a {opposite} b;", $"var answer = a {boundary} b;" },
+            mutants.Select(mutant => mutant.MutatedSource));
+        Assert.NotEqual(mutants[0].Id, mutants[1].Id);
     }
 
     [Fact]
