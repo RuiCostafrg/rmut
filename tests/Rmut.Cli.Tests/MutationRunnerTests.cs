@@ -176,12 +176,65 @@ public sealed class MutationRunnerTests
             """);
 
         var full = await fixture.RunNativeAsync(switched: true);
-        var report = await fixture.RunNativeAsync(switched: true, coverage: true);
+        var report = await fixture.RunNativeAsync(switched: true, coverage: true, perTest: true);
 
         Assert.Equal(full.Mutants.Select(Identity), report.Mutants.Select(Identity));
         Assert.Equal(staticInitialization ? Outcome.Killed : Outcome.Survived, report.Mutants[0].Outcome);
         Assert.Equal(Outcome.Survived, report.Mutants[1].Outcome);
         fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task PerTestCoverageKeepsBothCoveringTestsAndExcludesAnUnrelatedTest()
+    {
+        using var fixture = new Fixture("_ = Calculator.Target(4, 2);", """
+            public static class Calculator
+            {
+                public static int Target(int a, int b) => a + b;
+                public static int Unvisited(int a, int b) => a - b;
+            }
+            """, """
+            public sealed class IndependentTests
+            {
+                [Fact]
+                public void AlsoCoversTarget() => Assert.Equal(6, Calculator.Target(4, 2));
+
+                [Fact]
+                public void Unrelated() => Assert.True(true);
+            }
+            """);
+        var log = new List<string>();
+
+        var report = await fixture.RunNativeAsync(switched: true, coverage: true, perTest: true, log: log.Add);
+
+        Assert.Equal(new[] { Outcome.Killed, Outcome.NoCoverage }, report.Mutants.Select(mutant => mutant.Outcome));
+        Assert.Contains($"Selected 2 of 3 tests for {report.Mutants[0].Id}", log);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
+    public async Task PerTestCoverageFallsBackForAmbiguousTheoryRows()
+    {
+        using var fixture = new Fixture("Assert.Equal(6, Calculator.Target(4, 2));", """
+            public static class Calculator
+            {
+                public static int Target(int a, int b) => a + b;
+            }
+            """, """
+            public sealed class ParameterizedTests
+            {
+                [Theory]
+                [InlineData(1)]
+                [InlineData(2)]
+                public void Unrelated(int x) => Assert.True(x > 0);
+            }
+            """);
+        var log = new List<string>();
+
+        var report = await fixture.RunNativeAsync(switched: true, coverage: true, perTest: true, log: log.Add);
+
+        Assert.Equal(Outcome.Killed, Assert.Single(report.Mutants).Outcome);
+        Assert.DoesNotContain(log, line => line.StartsWith("Selected ", StringComparison.Ordinal));
     }
 
     private static object Identity(MutantResult mutant) =>
@@ -277,7 +330,7 @@ public sealed class MutationRunnerTests
         private readonly RunOptions options;
         private readonly Dictionary<string, string> inputs;
 
-        public Fixture(string assertion, string source = Source)
+        public Fixture(string assertion, string source = Source, string additionalTests = "")
         {
             inputs = new()
             {
@@ -312,6 +365,7 @@ public sealed class MutationRunnerTests
                             {{assertion}}
                         }
                     }
+                    {{additionalTests}}
                     """
             };
 
@@ -331,9 +385,9 @@ public sealed class MutationRunnerTests
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
             bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null,
-            bool coverage = false) =>
+            bool coverage = false, bool perTest = false) =>
             NativeRunner.RunAsync(options with
-                { Switched = switched, SwitchedTestAssembly = switchedTestAssembly, Coverage = coverage },
+                { Switched = switched, SwitchedTestAssembly = switchedTestAssembly, Coverage = perTest ? CoverageMode.PerTest : coverage ? CoverageMode.All : CoverageMode.Off },
                 timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);
 

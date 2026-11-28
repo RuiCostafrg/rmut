@@ -40,7 +40,15 @@ same passing tests. Rmut reports `noCoverage` for eligible mutations with verifi
 absence of hits and runs the full suite for covered mutations. Incomplete
 collection, unsupported expressions, and production static initialization use
 full-suite execution. Coverage is off by default. This mode collects suite-wide
-hits, with no per-test attribution.
+hits without attributing them to individual tests.
+
+Use `--coverage per-test` for independent xUnit tests with unique, filterable
+VSTest identities. Rmut first collects suite-wide hits, then runs each test in a
+private build copy and checks that the isolated hit sets reproduce the suite-wide
+hits. It retains every covering test for a mutant and verifies the executed test
+identities before accepting a filtered result. Ambiguous theory rows, incomplete
+attribution, and production static initialization keep full-suite execution.
+Use suite-wide coverage for tests that depend on shared process state or order.
 
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 

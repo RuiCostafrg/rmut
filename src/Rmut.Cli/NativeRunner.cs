@@ -100,7 +100,7 @@ internal static class NativeRunner
                         await ReplyAsync(prepared);
                         break;
                     case EvaluateSwitched evaluation when evaluation.Id is { Length: 64 }:
-                        var switched = await session.EvaluateSwitchedAsync(evaluation.Id, cancellation);
+                        var switched = await session.EvaluateSwitchedAsync(evaluation.Id, log, cancellation);
                         if (switched is not null)
                             log($"Switched execution {evaluation.Id}");
                         await ReplyAsync(switched);

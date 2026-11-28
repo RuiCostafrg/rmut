@@ -2,8 +2,10 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Rmut.Cli;
 
+internal enum CoverageMode { Off, All, PerTest }
+
 internal sealed record RunOptions(string Project, string TestProject, string? Json, bool Switched = false,
-    string? SwitchedTestAssembly = null, bool Coverage = false)
+    string? SwitchedTestAssembly = null, CoverageMode Coverage = CoverageMode.Off)
 {
     public static bool TryParse(string[] args, [NotNullWhen(true)] out RunOptions? options)
     {
@@ -34,11 +36,16 @@ internal sealed record RunOptions(string Project, string TestProject, string? Js
             return false;
 
         var coverage = paths.GetValueOrDefault("--coverage", "off");
-        if (coverage is not ("off" or "all") || (coverage == "all" && execution != "switched"))
+        if (coverage is not ("off" or "all" or "per-test") || (coverage != "off" && execution != "switched"))
             return false;
 
         options = new RunOptions(project, testProject, paths.GetValueOrDefault("--json"),
-            execution == "switched", assembly, coverage == "all");
+            execution == "switched", assembly, coverage switch
+            {
+                "all" => CoverageMode.All,
+                "per-test" => CoverageMode.PerTest,
+                _ => CoverageMode.Off
+            });
         return true;
     }
 }

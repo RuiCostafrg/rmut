@@ -37,6 +37,7 @@ struct Sources {
     paths: Vec<Source>,
     selector: Option<String>,
     coverage_path: Option<String>,
+    coverage_scope: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -182,8 +183,14 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
             .zip(&candidates)
             .enumerate()
             .filter_map(|(index, (source, file))| {
-                discovery::instrument(&source.content, &file.mutations, &selector, coverage)
-                    .map(|content| InstrumentedSource { index, content })
+                discovery::instrument(
+                    &source.content,
+                    &file.mutations,
+                    &selector,
+                    coverage,
+                    sources.coverage_scope.as_deref(),
+                )
+                .map(|content| InstrumentedSource { index, content })
             })
             .collect();
         if !files.is_empty() {

@@ -227,6 +227,12 @@ def invoke(tool, args, spec, workspace, directory, *, seed=False):
                 result["switched_mutants"] = len(switched_ids)
                 if sorted(switched_ids) != sorted(expected_ids):
                     raise ValueError("Rmut did not use switched execution for every mutant")
+            if "require_selected_counts" in spec and not seed:
+                selection = re.findall(r"^Selected (\d+) of \d+ tests for [A-F0-9]{64}$",
+                                       (directory / "tool.log").read_text(), re.M)
+                result["selected_counts"] = sorted(map(int, selection))
+                if result["selected_counts"] != spec["require_selected_counts"]:
+                    raise ValueError("Rmut did not select the expected covering tests")
         if records and not any(row["outcome"] != "ignored" for row in records.values()):
             raise ValueError("Mutation report contained only exclusions")
         if not records:

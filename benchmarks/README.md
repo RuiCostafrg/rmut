@@ -28,6 +28,8 @@ python3 -B benchmarks/run.py compare shared-operators \
 | `relational-gap` | Stryker has a second replacement for the same comparison expression. |
 | `no-coverage-gap` | Compares Stryker per-test coverage with Rmut coverage off to retain the default-behavior differential. |
 | `coverage-all` | Both installed tools use suite-wide coverage. Four mutants are killed and one is reported as uncovered. |
+| `coverage-per-test` | Both tools use per-test coverage on the same parallel xUnit fixture. Rmut must select both covering tests for the shared mutant and one test for the exclusive mutant. |
+| `coverage-per-test-static` | Stryker comparison for a mutation reached through static initialization. Rmut must use the full suite. |
 | `operator-exclusion-gap` | A configured Stryker mutator exclusion changes the outcome for the logical edit. |
 | `smart-enum` | Small real library and its unit tests. The pinned upstream project is multi-targeted. |
 | `fluent-validation` | Larger real library and its unit tests. The pinned test project targets multiple runtimes. |
@@ -42,7 +44,7 @@ package built from that revision and Stryker.NET 5.1.0, uses an isolated .NET
 10.0.404 SDK, and delegates cgroup v2 accounting on an Ubuntu x64 runner. Download
 the `paired-benchmark` artifact from the run for the raw evidence, including when
 a gate fails. Select `switched-assembly` to measure the opt-in DLL path or
-`coverage-all` for matched suite-wide coverage. The
+`coverage-all` for matched suite-wide coverage, or `coverage-per-test` for matched per-test coverage. The
 optional `profile` input collects a separate Rmut trace after measurement with
 process and file-copy syscalls, MSBuild performance summaries, and TRX timings.
 

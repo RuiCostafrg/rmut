@@ -74,6 +74,7 @@ pub fn instrument(
     mutations: &[Mutation<'_>],
     selector: &str,
     coverage_path: Option<&str>,
+    coverage_scope: Option<&str>,
 ) -> Option<String> {
     let mut end = source.len();
     let mut pieces = Vec::new();
@@ -98,8 +99,19 @@ pub fn instrument(
                     .replace('\u{2028}', "\\u2028")
                     .replace('\u{2029}', "\\u2029")
             };
-            let hit = marker(&mutant.id);
-            let error = marker("probe-error");
+            let scoped_marker = |name: &str, variable: &str| {
+                let Some(scope) = coverage_scope else {
+                    return marker(name);
+                };
+                let suffix = serde_json::to_string(&format!("{}{name}", std::path::MAIN_SEPARATOR))
+                    .expect("encoding a string cannot fail");
+                format!(
+                    "(global::System.Environment.GetEnvironmentVariable(\"{scope}\") is string {variable} ? {variable} + {suffix} : {})",
+                    marker(name)
+                )
+            };
+            let hit = scoped_marker(&mutant.id, selector);
+            let error = scoped_marker("probe-error", &format!("{selector}_ERROR"));
             format!(
                 concat!(
                     "(global::System.Environment.GetEnvironmentVariable(\"{}\") is null ",

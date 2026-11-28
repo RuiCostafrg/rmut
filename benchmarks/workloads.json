@@ -48,6 +48,29 @@
       "coverage-analysis": "all"
     }
   },
+  "coverage-per-test": {
+    "source": "fixtures/PerTest",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true,
+    "require_selected_counts": [1, 2],
+    "rmut_args": ["--execution", "switched", "--coverage", "per-test"],
+    "stryker_config": {
+      "coverage-analysis": "perTest"
+    }
+  },
+  "coverage-per-test-static": {
+    "source": "fixtures/PerTestStatic",
+    "project": "Subject/Subject.csproj",
+    "test_project": "Subject.Tests/Subject.Tests.csproj",
+    "shared_operators": true,
+    "require_selected_counts": [],
+    "rmut_args": ["--execution", "switched", "--coverage", "per-test"],
+    "stryker_config": {
+      "coverage-analysis": "perTest"
+    },
+    "comparison_only": "Static initialization conformance case"
+  },
   "smart-enum": {
     "repository": "https://github.com/ardalis/SmartEnum.git",
     "revision": "3a33e77dc2693c8064b79bff2414aa1bcda92529",
