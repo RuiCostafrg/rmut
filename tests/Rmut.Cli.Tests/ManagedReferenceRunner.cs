@@ -7,7 +7,7 @@ internal sealed class ManagedReferenceRunner(RunOptions options, TimeSpan timeou
 {
     public async Task<RunReport> RunAsync(CancellationToken cancellation)
     {
-        using var session = new EvaluationSession(options, timeout, cancellation);
+        await using var session = new EvaluationSession(options, timeout, cancellation);
         var results = new List<MutantResult>();
         var baseline = await session.BaselineAsync(cancellation);
         LogResult("Baseline", baseline);

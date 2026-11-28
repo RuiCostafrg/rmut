@@ -41,7 +41,7 @@ internal static class NativeRunner
         if (packagedRid != RuntimeInformation.RuntimeIdentifier)
             throw new IOException($"The installed Rmut engine targets {packagedRid}. This runtime is {RuntimeInformation.RuntimeIdentifier}.");
 
-        using var session = new EvaluationSession(options, timeout, cancellation);
+        await using var session = new EvaluationSession(options, timeout, cancellation);
         var binaryName = OperatingSystem.IsWindows() ? "rmut-native.exe" : "rmut-native";
         var packagedBinary = Path.Combine(Path.GetDirectoryName(assembly.Location)!, binaryName);
         // NuGet extraction may discard executable permissions. Restore them on a private copy.

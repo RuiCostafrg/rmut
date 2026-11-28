@@ -110,7 +110,7 @@ public sealed class MutationRunnerTests
             """);
         var log = new List<string>();
         var report = await fixture.RunNativeAsync(switched: true, log: log.Add,
-            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true, switchedWorkers: 2);
+            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true, switchedWorkers: 2, useCompilerServer: true);
 
         Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
         Assert.Equal(Outcome.Killed, Assert.Single(report.Mutants).Outcome);
@@ -345,11 +345,11 @@ public sealed class MutationRunnerTests
 
         public Task<RunReport> RunNativeAsync(CancellationToken cancellation = default, TimeSpan? timeout = null,
             bool switched = false, Action<string>? log = null, string? switchedTestAssembly = null,
-            bool reuseBaselineBuild = false, int switchedWorkers = 1) =>
+            bool reuseBaselineBuild = false, int switchedWorkers = 1, bool useCompilerServer = false) =>
             NativeRunner.RunAsync(options with
             {
                 Switched = switched, SwitchedTestAssembly = switchedTestAssembly, ReuseBaselineBuild = reuseBaselineBuild,
-                SwitchedWorkers = switchedWorkers
+                SwitchedWorkers = switchedWorkers, UseCompilerServer = useCompilerServer
             },
                 timeout ?? TimeSpan.FromMinutes(2),
                 log ?? (_ => { }), cancellation);

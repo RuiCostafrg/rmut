@@ -21,10 +21,12 @@ def child():
         command.append("-clp:PerformanceSummary")
 
     started = time.time()
-    result = subprocess.run(command, capture_output=True,
-                            env={**os.environ, "DOTNET_HOST_PATH": command[0]})
-    finished = time.time()
     output = Path(os.environ["RMUT_PROFILE_OUTPUT"])
+    environment = {**os.environ, "DOTNET_HOST_PATH": command[0]}
+    if verb == "build":
+        environment["RoslynCommandLineLogFile"] = str(output / f"{started:.6f}-roslyn-{os.getpid()}.log")
+    result = subprocess.run(command, capture_output=True, env=environment)
+    finished = time.time()
     log = output / f"{started:.6f}-{verb}-{os.getpid()}.log"
     log.write_bytes(result.stdout + result.stderr)
     sys.stdout.buffer.write(result.stdout)

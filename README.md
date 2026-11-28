@@ -48,6 +48,11 @@ mutant can run alongside the control, and its result counts only if the
 control passes. Use two workers when
 the suite's simultaneous runs can use external resources independently.
 
+For projects that support Roslyn shared compilation, `--switched-compiler
+private-server` reuses a compiler process across the original and
+instrumented SDK builds. The server is private to the run and shuts
+down before switched tests start. Test processes remain isolated.
+
 Use switched mode with relocatable SDK-style builds and tests that exercise runtime behavior. Use fresh execution if your build inspects source bodies, embeds absolute workspace paths, or your tests rely on uninstrumented source or assembly contents.
 
 ## Verify a local package
