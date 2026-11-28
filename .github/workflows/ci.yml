@@ -51,23 +51,55 @@ jobs:
   platforms:
     runs-on: ${{ matrix.os }}
     # GitHub reports longer queue times for macOS ARM64 runners.
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 60 || 25 }}
+    timeout-minutes: ${{ matrix.os == 'macos-26' && 60 || 25 }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-2025]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, windows-2025]
     defaults:
       run:
         shell: bash
     steps:
+      - name: Verify macOS runner architecture
+        if: runner.os == 'macOS'
+        run: |
+          uname -m
+          sw_vers
+          test "$(uname -m)" = arm64
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 10.0.x
+      - name: Verify macOS .NET SDK architecture
+        if: runner.os == 'macOS'
+        run: |
+          info=$(dotnet --info)
+          printf '%s\n' "$info"
+          grep -Eq '^[[:space:]]*RID:[[:space:]]+osx-arm64[[:space:]]*$' <<< "$info"
       - run: dotnet test tests/Rmut.Engine.Tests --configuration Release
-      - run: dotnet test tests/Rmut.Cli.Tests --configuration Release
+      - name: Run CLI tests
+        if: runner.os != 'macOS'
+        run: dotnet test tests/Rmut.Cli.Tests --configuration Release
+      - name: Run macOS CLI tests without process cancellation
+        if: runner.os == 'macOS'
+        run: >-
+          dotnet test tests/Rmut.Cli.Tests --configuration Release
+          --logger 'console;verbosity=detailed'
+          --filter 'FullyQualifiedName!~DeadlineExpiryIsATimeout&FullyQualifiedName!~CancelingAnActiveRunStopsItAndPreservesInputs'
+      - name: Run macOS CLI deadline test
+        if: runner.os == 'macOS'
+        run: >-
+          dotnet test tests/Rmut.Cli.Tests --configuration Release --no-build
+          --logger 'console;verbosity=detailed'
+          --filter 'FullyQualifiedName~DeadlineExpiryIsATimeout'
+      - name: Run macOS CLI cancellation test
+        if: runner.os == 'macOS'
+        run: >-
+          dotnet test tests/Rmut.Cli.Tests --configuration Release --no-build
+          --logger 'console;verbosity=detailed'
+          --filter 'FullyQualifiedName~CancelingAnActiveRunStopsItAndPreservesInputs'
       - name: Pack and smoke-test the installed tool
         run: |
           dotnet pack src/Rmut.Cli --configuration Release --no-build \
