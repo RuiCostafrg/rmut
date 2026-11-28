@@ -61,6 +61,13 @@ internal sealed class EvaluationSession : IAsyncDisposable
             compilerServer = await CompilerServer.TryCreateAsync(Path.GetDirectoryName(privateProject)!,
                 timeout, cancellation);
         var build = await BuildAsync(privateProject, cancellation, server: compilerServer);
+        if (build.Outcome != Outcome.Passed && compilerServer is not null)
+        {
+            await StopCompilerServerAsync();
+            using var clean = new Workspace(root, cancellation);
+            baselineWorkspace.RestoreSnapshot(clean);
+            build = await BuildAsync(privateProject, cancellation);
+        }
         if (build.Outcome != Outcome.Passed)
             return build;
 
@@ -75,6 +82,9 @@ internal sealed class EvaluationSession : IAsyncDisposable
                 // The original baseline can still run, and preparation can use a clean workspace.
             }
         }
+
+        if (baselineBuildSnapshot is null)
+            await StopCompilerServerAsync();
 
         return await TestAsync(privateProject, cancellation);
     }
@@ -145,6 +155,7 @@ internal sealed class EvaluationSession : IAsyncDisposable
             }
         }
 
+        await StopCompilerServerAsync();
         Workspace? template = null;
         try
         {

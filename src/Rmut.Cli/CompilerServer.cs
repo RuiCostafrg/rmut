@@ -1,6 +1,6 @@
 namespace Rmut.Cli;
 
-internal sealed class CompilerServer(string directory, string assembly) : IAsyncDisposable
+internal sealed class CompilerServer(string assembly) : IAsyncDisposable
 {
     private readonly string pipe = $"rmut-{Guid.NewGuid():N}";
 
@@ -30,7 +30,7 @@ internal sealed class CompilerServer(string directory, string assembly) : IAsync
 
             var compiler = Path.Combine(matches[0][prefix.Length..^1], selected, "Roslyn", "bincore", "VBCSCompiler.dll");
             return Path.IsPathFullyQualified(compiler) && File.Exists(compiler)
-                ? new CompilerServer(directory, compiler)
+                ? new CompilerServer(compiler)
                 : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -41,7 +41,7 @@ internal sealed class CompilerServer(string directory, string assembly) : IAsync
 
     public async ValueTask DisposeAsync()
     {
-        var shutdown = await DotnetProcess.RunAsync(directory, TimeSpan.FromSeconds(15), CancellationToken.None,
+        var shutdown = await DotnetProcess.RunAsync(Path.GetDirectoryName(assembly)!, TimeSpan.FromSeconds(15), CancellationToken.None,
             "exec", assembly, $"-pipename:{pipe}", "-shutdown");
         if (shutdown.ExitCode != 0)
             throw new IOException($"Could not stop the private compiler server. {shutdown.Diagnostics}");

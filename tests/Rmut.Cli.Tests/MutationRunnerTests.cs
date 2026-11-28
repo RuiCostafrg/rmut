@@ -87,6 +87,37 @@ public sealed class MutationRunnerTests
     }
 
     [Fact]
+    public async Task FailedSharedCompilationRetriesTheOriginalBuildInACleanWorkspace()
+    {
+        using var proof = new TemporaryDirectory();
+        var attempted = Path.Combine(proof.Directory.FullName, "attempted");
+        using var fixture = new Fixture("Assert.Equal(5, Calculator.Tested());", """
+            public static class Calculator
+            {
+                public static int Tested() => 3 + 2;
+            }
+            """, $$"""
+            <Project>
+              <Target Name="RejectSharedCompilation" BeforeTargets="CoreCompile">
+                <Error Condition="Exists('$(IntermediateOutputPath)shared-attempt')" Text="Workspace was reused." />
+                <WriteLinesToFile Condition="'$(SharedCompilationId)' != ''"
+                    File="$(IntermediateOutputPath)shared-attempt" Lines="shared" />
+                <WriteLinesToFile Condition="'$(SharedCompilationId)' != ''"
+                    File="{{System.Security.SecurityElement.Escape(attempted)}}" Lines="shared" />
+                <Error Condition="'$(SharedCompilationId)' != ''" Text="No shared compilation for this project." />
+              </Target>
+            </Project>
+            """);
+        var report = await fixture.RunNativeAsync(switched: true,
+            switchedTestAssembly: "bin/Debug/net10.0/Calculator.Tests.dll", reuseBaselineBuild: true, useCompilerServer: true);
+
+        Assert.True(File.Exists(attempted));
+        Assert.Equal(Outcome.Passed, report.Baseline.Outcome);
+        Assert.Equal(Outcome.Killed, Assert.Single(report.Mutants).Outcome);
+        fixture.AssertInputsUnchanged();
+    }
+
+    [Fact]
     public async Task FailedSwitchedControlDiscardsSpeculativeResult()
     {
         using var fixture = new Fixture("""
