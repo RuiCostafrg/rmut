@@ -99,3 +99,35 @@ tool logs, package fingerprints and normalized differences.
 Both workloads remain compare-only. Green capture jobs indicate that the
 workflow saved evidence. Neither workload established parity, so no elapsed
 time, CPU or memory comparison was collected.
+
+### Standalone generated-source rollback reproduction
+
+The [GeneratedRollback fixture](../fixtures/GeneratedRollback) reproduces the
+FluentValidation failure with one method, one test and the same
+Zomp.SyncMethodGenerator 1.6.17. The subject targets .NET 8 and the test
+project targets .NET 10, matching the pinned upstream build.
+
+```sh
+dotnet tool install dotnet-stryker --version 5.1.0 --tool-path /tmp/rmut-stryker-repro
+cd fixtures/GeneratedRollback/Subject.Tests
+dotnet test
+/tmp/rmut-stryker-repro/dotnet-stryker --skip-version-check --diag
+```
+
+The baseline passes. Stryker creates a LINQ mutation that replaces
+`List<string>.Count` with `Sum` in the async method. Zomp regenerates the sync
+method from the instrumented source. The generated copy then fails with
+CS1061. Stryker identifies the generated file and method, fails to roll back
+the originating edit, and confirms it can still build the original project.
+It exits zero without writing the requested mutation report. This reproduces
+the failure without running Rmut or building FluentValidation.
+
+The hosted conformance job preserves both the standalone generator logs and
+the full-project evidence. The full-project configuration retains the pinned
+patch, generator, tool version, and mutation scope.
+
+The [first hosted follow-up](https://github.com/RuiCostafrg/rmut/actions/runs/46078926680)
+reproduced the standalone failure and captured the same failure on pinned
+FluentValidation. Rmut passed its baseline and logged outcomes for 202
+mutants before the 50-minute harness deadline. The workflow now allows two
+hours per tool on FluentValidation to capture the slower fresh-build run.

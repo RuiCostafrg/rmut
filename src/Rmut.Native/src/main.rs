@@ -23,9 +23,11 @@ struct RunResult {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Source {
     path: String,
     content: String,
+    active_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -142,7 +144,12 @@ fn run(host: &mut Host) -> Result<Report, Box<dyn std::error::Error>> {
     parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into())?;
     let mut candidates = Vec::new();
     for source in &sources.paths {
-        match discovery::discover(&mut parser, &source.path, &source.content) {
+        match discovery::discover(
+            &mut parser,
+            &source.path,
+            &source.content,
+            source.active_content.as_deref().unwrap_or(&source.content),
+        ) {
             Ok(discovery) => candidates.push(discovery),
             Err(error) => {
                 let result = RunResult {

@@ -20,6 +20,9 @@ rmut run --project src/MyApp/MyApp.csproj --test-project tests/MyApp.Tests/MyApp
 
 Add `--json report.json` to save the baseline and individual mutant outcomes.
 
+Rmut reads the compiler inputs from the baseline test build. That build must
+select a .NET 10 or newer SDK and compile the production project once.
+
 ### Execution modes
 
 Fresh execution is the default. It copies the workspace, restores and builds the test project and its references, and runs the full suite for each mutant.

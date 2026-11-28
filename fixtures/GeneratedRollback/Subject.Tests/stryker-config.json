@@ -1,0 +1,14 @@
+{
+  "stryker-config": {
+    "project": "Subject.csproj",
+    "target-framework": "net10.0",
+    "reporters": ["json"],
+    "configuration": "Debug",
+    "concurrency": 1,
+    "coverage-analysis": "off",
+    "disable-mix-mutants": true,
+    "disable-bail": true,
+    "break-on-initial-test-failure": true,
+    "test-runner": "vstest"
+  }
+}
